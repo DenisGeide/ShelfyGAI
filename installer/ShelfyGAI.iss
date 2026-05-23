@@ -5,7 +5,7 @@
 #define MyAppVersion "0.1.0"
 #define MyAppVersionInfo "0.1.0.0"
 #define MyAppPublisher "ShelfyGAI contributors"
-#define MyAppURL "https://github.com/shelfygai/shelfygai"
+#define MyAppURL "https://github.com/DenisGeide/ShelfyGAI"
 #define MyAppExeName "ShelfyGAI.exe"
 
 [Setup]
@@ -18,12 +18,12 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases
 DefaultDirName={autopf}\{#MyAppName}
-DefaultGroupName={autoprograms}\{#MyAppName}
-DisableProgramGroupPage=no
+DefaultGroupName={#MyAppName}
+DisableProgramGroupPage=yes
 AllowNoIcons=yes
 LicenseFile=..\LICENSE
 OutputDir=..\dist\installer
-OutputBaseFilename=ShelfyGAI-Setup-{#MyAppVersion}
+OutputBaseFilename=ShelfyGAI-Setup-v{#MyAppVersion}
 SetupIconFile=..\build\assets\app_icon.ico
 Compression=lzma2
 SolidCompression=yes
@@ -46,7 +46,7 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
 Source: "..\dist\ShelfyGAI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

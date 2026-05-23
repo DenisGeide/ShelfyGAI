@@ -55,7 +55,7 @@ Build the executable first because the installer consumes the full
 Output:
 
 ```text
-dist\installer\ShelfyGAI-Setup-0.1.0.exe
+dist\installer\ShelfyGAI-Setup-v0.1.0.exe
 ```
 
 The Inno Setup script lives at:
@@ -68,7 +68,7 @@ Installer behavior:
 
 - Installs to Program Files for all-users installs or a user-local app directory for current-user installs.
 - Creates a Start Menu shortcut.
-- Offers an optional desktop shortcut.
+- Creates a desktop shortcut by default.
 - Provides normal Windows uninstall support.
 - Offers to launch ShelfyGAI after install.
 - Does not enable Windows autostart by default.

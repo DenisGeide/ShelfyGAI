@@ -1,11 +1,13 @@
 param(
-    [string]$DownloadUrl = "https://github.com/shelfygai/shelfygai/releases/download/v0.1.0/ShelfyGAI-Setup-0.1.0.exe",
+    [string]$DownloadUrl = "https://github.com/DenisGeide/ShelfyGAI/releases/download/v0.1.0-alpha/ShelfyGAI-Setup-v0.1.0.exe",
     [string]$DownloadSha256 = "",
     [string]$InnoCompiler
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+Write-Warning "Building experimental web installer bootstrapper. Public alpha users should receive ShelfyGAI-Setup-v0.1.0.exe instead."
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $IconPath = Join-Path $ProjectRoot "build\assets\app_icon.ico"

@@ -15,6 +15,28 @@ if (-not (Test-Path -LiteralPath $Python)) {
 }
 $env:PYTHONPATH = Join-Path $ProjectRoot "src"
 
+function Test-PythonModule {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ModuleName
+    )
+
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $Python -c "import $ModuleName" *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+}
+
+Push-Location $ProjectRoot
+try {
+
+Write-Host "Using Python: $Python"
+
 if ($Clean) {
     & (Join-Path $PSScriptRoot "clean_build.ps1")
 }
@@ -23,9 +45,8 @@ if ($InstallBuildDeps) {
     & $Python -m pip install -e ".[build]"
 }
 
-& $Python -c "import PyInstaller" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller is not installed. Run: .\scripts\build_exe.ps1 -InstallBuildDeps"
+if (-not (Test-PythonModule "PyInstaller")) {
+    throw "PyInstaller is not installed for $Python. Run: .\scripts\build_exe.ps1 -InstallBuildDeps"
 }
 
 if (-not $SkipChecks) {
@@ -85,3 +106,8 @@ if ($SmokeTest) {
 
 Write-Host "Built ShelfyGAI package: $(Split-Path -Parent $ExePath)"
 Write-Host "Executable: $ExePath"
+
+}
+finally {
+    Pop-Location
+}

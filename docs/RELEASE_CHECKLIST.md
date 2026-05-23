@@ -57,13 +57,15 @@ artifacts automatically during release preparation.
 - [ ] `dist\ShelfyGAI\ShelfyGAI.exe` launches on Windows.
 - [ ] `.\scripts\build_installer.ps1 -SkipExeBuild` succeeds when Inno Setup is installed.
 - [ ] Full installer SHA-256 is calculated with `Get-FileHash`.
-- [ ] `.\scripts\build_web_installer.ps1 -DownloadUrl <release-url> -DownloadSha256 <sha256>` succeeds.
-- [ ] `dist\installer\ShelfyGAI-WebSetup-0.1.0.exe` downloads and launches the full installer.
+- [ ] `dist\installer\ShelfyGAI-Setup-v0.1.0.exe` is the primary user-facing installer.
+- [ ] Installer creates Start Menu and desktop shortcuts.
+- [ ] Installer uninstalls app files while preserving `%APPDATA%\ShelfyGAI`.
+- [ ] Experimental web installer is left unpublished unless a downloader path is explicitly supported.
 - [ ] `.\scripts\release.ps1`
 - [ ] Release ZIP is generated under `dist\release\`.
 - [ ] `SHA256SUMS.txt` is generated for release artifacts.
 - [ ] Settings and logs under `%APPDATA%\ShelfyGAI` survive replacing the executable.
-- [ ] Full offline installer remains attached next to the web installer.
+- [ ] Full installer remains attached to the GitHub release.
 - [ ] Release artifacts are attached to the GitHub release only after local smoke testing.
 
 ## Final Publish

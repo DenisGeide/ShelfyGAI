@@ -45,28 +45,32 @@ If `ISCC.exe` is not discoverable:
 Output:
 
 ```text
-dist\installer\ShelfyGAI-Setup-0.1.0.exe
+dist\installer\ShelfyGAI-Setup-v0.1.0.exe
 ```
 
-## Build Web Installer
+This is the primary installer for normal users. They download this one `.exe`,
+run it, and do not need Python, pip, Git, or any source checkout.
 
-The web installer is the one-file bootstrapper intended for the simplest user
-flow. The user opens one EXE, the bootstrapper downloads the full installer from
-GitHub Releases, verifies the optional SHA-256 hash, and launches the full
-installer.
+## Experimental Web Installer Bootstrapper
+
+The full installer above is the only recommended public alpha artifact for
+normal users. The web installer is an experimental maintainer-only bootstrapper
+that downloads the full installer from GitHub Releases, verifies the optional
+SHA-256 hash, and launches the full installer. Do not publish it unless the
+project explicitly decides to support a downloader path.
 
 Build the full installer first and attach it to a GitHub release draft. Then
 compute its SHA-256:
 
 ```powershell
-Get-FileHash .\dist\installer\ShelfyGAI-Setup-0.1.0.exe -Algorithm SHA256
+Get-FileHash .\dist\installer\ShelfyGAI-Setup-v0.1.0.exe -Algorithm SHA256
 ```
 
 Build the web installer:
 
 ```powershell
 .\scripts\build_web_installer.ps1 `
-  -DownloadUrl "https://github.com/shelfygai/shelfygai/releases/download/v0.1.0/ShelfyGAI-Setup-0.1.0.exe" `
+  -DownloadUrl "https://github.com/DenisGeide/ShelfyGAI/releases/download/v0.1.0-alpha/ShelfyGAI-Setup-v0.1.0.exe" `
   -DownloadSha256 "<64-character-sha256>"
 ```
 
@@ -76,16 +80,15 @@ Output:
 dist\installer\ShelfyGAI-WebSetup-0.1.0.exe
 ```
 
-For release builds, do not skip `-DownloadSha256`. Keep the full offline
-installer available next to the web installer for users who need an archival or
-offline install path.
+For release builds, do not skip `-DownloadSha256`. Keep
+`ShelfyGAI-Setup-v0.1.0.exe` as the normal-user release artifact.
 
 ## Installer Behavior
 
 - Installs to Program Files for all-users installs or a user-local app directory
   for current-user installs.
 - Creates a Start Menu shortcut.
-- Offers an optional desktop shortcut.
+- Creates a desktop shortcut by default.
 - Adds standard Windows uninstall support.
 - Allows launching ShelfyGAI after installation.
 - Does not write an autostart registry entry during installation.
@@ -106,9 +109,9 @@ These files should survive installer upgrades and uninstall/reinstall cycles.
 ## Source Files
 
 - `installer\ShelfyGAI.iss`
-- `installer\ShelfyGAI-WebSetup.iss`
+- `installer\ShelfyGAI-WebSetup.iss` experimental
 - `installer\README_INSTALLER.md`
-- `installer\README_WEB_INSTALLER.md`
+- `installer\README_WEB_INSTALLER.md` experimental
 - `scripts\build_installer.ps1`
 - `scripts\build_web_installer.ps1`
 - `packaging\windows\version_info.txt`

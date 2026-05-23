@@ -46,9 +46,9 @@ dev = [
 shelfygai = "shelfygai.main:run"
 
 [project.urls]
-Homepage = "https://github.com/shelfygai/shelfygai"
-Issues = "https://github.com/shelfygai/shelfygai/issues"
-Security = "https://github.com/shelfygai/shelfygai/security"
+Homepage = "https://github.com/DenisGeide/ShelfyGAI"
+Issues = "https://github.com/DenisGeide/ShelfyGAI/issues"
+Security = "https://github.com/DenisGeide/ShelfyGAI/security"
 
 [tool.setuptools.packages.find]
 where = ["src"]

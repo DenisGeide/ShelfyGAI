@@ -9,7 +9,7 @@ Use this checklist before publishing a ShelfyGAI release. Test both the source a
 - [ ] Package tested:
   - [ ] Source run with `python -m shelfygai`
   - [ ] Packaged `dist\ShelfyGAI\ShelfyGAI.exe`
-  - [ ] Installer `dist\installer\ShelfyGAI-Setup-0.1.0.exe`
+  - [ ] Installer `dist\installer\ShelfyGAI-Setup-v0.1.0.exe`
 - [ ] Tester:
 - [ ] Date:
 
@@ -266,7 +266,7 @@ Record environment notes:
 ## Packaging And Update Survival
 
 - [ ] `.\scripts\build_exe.ps1 -Clean` creates `dist\ShelfyGAI\ShelfyGAI.exe`.
-- [ ] `.\scripts\build_installer.ps1 -SkipExeBuild` creates `dist\installer\ShelfyGAI-Setup-0.1.0.exe` when Inno Setup is installed.
+- [ ] `.\scripts\build_installer.ps1 -SkipExeBuild` creates `dist\installer\ShelfyGAI-Setup-v0.1.0.exe` when Inno Setup is installed.
 - [ ] `.\scripts\release.ps1` creates a ZIP and `SHA256SUMS.txt`.
 - [ ] Packaged EXE contains version metadata.
 - [ ] Packaged EXE contains the application icon.

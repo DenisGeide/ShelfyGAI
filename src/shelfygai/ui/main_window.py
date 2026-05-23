@@ -8,20 +8,17 @@ from time import perf_counter
 from PySide6.QtCore import (
     QByteArray,
     QEasingCurve,
-    QMimeData,
     QPoint,
     QPropertyAnimation,
     QSize,
     Qt,
     QTimer,
     QUrl,
-    Signal,
 )
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QDesktopServices,
-    QDrag,
     QIcon,
     QKeySequence,
     QPixmap,
@@ -76,6 +73,7 @@ from shelfygai.settings.settings_manager import (
     SettingsManager,
     current_boot_id,
 )
+from shelfygai.ui.components import GroupButton
 from shelfygai.ui.icons import AppIconProvider
 from shelfygai.ui.onboarding_dialog import ACCENT_COLORS, SettingsDialog
 from shelfygai.ui.theme import apply_theme
@@ -85,7 +83,6 @@ LOGGER = logging.getLogger(__name__)
 
 HANDLE_ROLE = Qt.ItemDataRole.UserRole
 EXE_PATH_ROLE = Qt.ItemDataRole.UserRole + 1
-WINDOW_HANDLE_MIME = "application/x-shelfygai-window-handle"
 FILTER_ROLE = Qt.ItemDataRole.UserRole + 2
 HOTKEY_ACTION_LABEL_KEYS = {
     HOTKEY_QUICK_HIDE: "hotkey.label.quick_hide",
@@ -99,24 +96,27 @@ HOTKEY_ACTION_DESCRIPTION_KEYS = {
 }
 NAVIGATION_KEYS = (
     "label.open_windows",
-    "label.managed",
+    "label.shelf",
+    "label.pinned",
+    "label.groups",
     "label.settings",
-    "label.safety",
     "label.about",
 )
 NAVIGATION_ICONS = (
     QStyle.StandardPixmap.SP_ComputerIcon,
     QStyle.StandardPixmap.SP_DirIcon,
+    QStyle.StandardPixmap.SP_ArrowUp,
+    QStyle.StandardPixmap.SP_DirHomeIcon,
     QStyle.StandardPixmap.SP_FileDialogDetailedView,
-    QStyle.StandardPixmap.SP_MessageBoxWarning,
     QStyle.StandardPixmap.SP_MessageBoxInformation,
 )
 PAGE_COPY_KEYS = {
     0: ("label.open_windows", "page.open_windows.subtitle"),
-    1: ("label.managed_windows", "page.managed_windows.subtitle"),
-    2: ("label.settings", "page.settings.subtitle"),
-    3: ("label.safety", "page.safety.subtitle"),
-    4: ("label.about", "page.about.subtitle"),
+    1: ("label.shelf", "page.shelf.subtitle"),
+    2: ("label.pinned", "page.pinned.subtitle"),
+    3: ("label.groups", "page.groups.subtitle"),
+    4: ("label.settings", "page.settings.subtitle"),
+    5: ("label.about", "page.about.subtitle"),
 }
 
 
@@ -146,6 +146,7 @@ class MainWindow(QMainWindow):
         self._available_table = self._build_table()
         self._shelf_table = self._build_table()
         self._pinned_table = self._build_table()
+        self._group_table = self._build_table()
         self._icon_provider = AppIconProvider(self)
         self._icon_refresh_timer = QTimer(self)
         self._icon_refresh_timer.setSingleShot(True)
@@ -158,17 +159,7 @@ class MainWindow(QMainWindow):
         self._groups_layout = QVBoxLayout(self._groups_container)
         self._groups_layout.setContentsMargins(0, 0, 0, 0)
         self._groups_layout.setSpacing(8)
-        self._managed_cards_container = QWidget()
-        self._managed_cards_layout = QVBoxLayout(self._managed_cards_container)
-        self._managed_cards_layout.setContentsMargins(0, 0, 0, 0)
-        self._managed_cards_layout.setSpacing(12)
-        self._managed_cards_scroll = QScrollArea()
-        self._managed_cards_scroll.setObjectName("CardScroll")
-        self._managed_cards_scroll.setWidgetResizable(True)
-        self._managed_cards_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._managed_cards_scroll.setWidget(self._managed_cards_container)
         self._open_windows_search = QLineEdit()
-        self._managed_windows_search = QLineEdit()
         self._open_windows_auto_refresh_checkbox = QCheckBox()
         self._open_windows_refresh_timer = QTimer(self)
         self._pinned_watcher_timer = QTimer(self)
@@ -178,6 +169,15 @@ class MainWindow(QMainWindow):
         self._open_windows_empty_label = QLabel()
         self._shelf_empty_label = QLabel()
         self._pinned_empty_label = QLabel()
+        self._group_empty_label = QLabel()
+        self._selected_window_icon = QLabel()
+        self._selected_window_app = QLabel()
+        self._selected_window_title = QLabel()
+        self._selected_window_state = QLabel()
+        self._selected_window_hint = QLabel()
+        self._hide_taskbar_checkbox = QCheckBox()
+        self._hide_alt_tab_checkbox = QCheckBox()
+        self._hide_tray_checkbox = QCheckBox()
         self._restore_on_exit_checkbox = QCheckBox()
         self._restore_pinned_on_exit_checkbox = QCheckBox()
         self._focus_restored_checkbox = QCheckBox()
@@ -210,7 +210,6 @@ class MainWindow(QMainWindow):
         self._sidebar: QFrame | None = None
         self._content_layout: QVBoxLayout | None = None
         self._nav_buttons: list[QPushButton] = []
-        self._card_animation: QPropertyAnimation | None = None
         self._page_animation: QPropertyAnimation | None = None
         self._tray_icon: QSystemTrayIcon | None = None
         self._tray_restore_all_action: QAction | None = None
@@ -218,9 +217,10 @@ class MainWindow(QMainWindow):
         self._tray_hint_shown = False
         self._initial_refresh_done = False
         self._initial_refresh_scheduled = False
-        self._managed_cards_dirty = True
+        self._last_available_windows: tuple[WindowInfo, ...] = ()
         self._last_shelf_items: tuple[ShelfItem, ...] = ()
         self._last_pinned_items: tuple[PinnedItem, ...] = ()
+        self._pinned_order: list[int] = []
 
         self._open_windows_refresh_timer.setInterval(5_000)
         self._open_windows_refresh_timer.setTimerType(Qt.TimerType.VeryCoarseTimer)
@@ -232,20 +232,7 @@ class MainWindow(QMainWindow):
         self._bind_text(self._open_windows_search, "placeholder.open_search", "setAccessibleName")
         self._open_windows_search.setClearButtonEnabled(True)
         self._open_windows_search.textChanged.connect(self._apply_open_windows_filter)
-        self._bind_text(
-            self._managed_windows_search,
-            "placeholder.hidden_search",
-            "setPlaceholderText",
-        )
-        self._bind_text(
-            self._managed_windows_search,
-            "placeholder.hidden_search",
-            "setAccessibleName",
-        )
-        self._managed_windows_search.setClearButtonEnabled(True)
-        self._managed_windows_search.textChanged.connect(
-            lambda: self._populate_managed_cards(self._last_shelf_items)
-        )
+        self._available_table.itemSelectionChanged.connect(self._update_selected_window_card)
         self._loading_label.setObjectName("LoadingPill")
         self._loading_label.setVisible(False)
         self._loading_label.setMinimumHeight(28)
@@ -264,6 +251,29 @@ class MainWindow(QMainWindow):
         self._pinned_empty_label.setWordWrap(True)
         self._pinned_empty_label.setMinimumHeight(76)
         self._pinned_empty_label.setVisible(False)
+        self._group_empty_label.setObjectName("EmptyState")
+        self._group_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._group_empty_label.setWordWrap(True)
+        self._group_empty_label.setMinimumHeight(76)
+        self._group_empty_label.setVisible(False)
+        self._selected_window_icon.setObjectName("IconBadge")
+        self._selected_window_icon.setFixedSize(42, 42)
+        self._selected_window_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._selected_window_app.setObjectName("CardTitle")
+        self._selected_window_title.setObjectName("Muted")
+        self._selected_window_title.setWordWrap(True)
+        self._selected_window_state.setObjectName("Muted")
+        self._selected_window_hint.setObjectName("EmptyState")
+        self._selected_window_hint.setWordWrap(True)
+        self._selected_window_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hide_taskbar_checkbox.setChecked(True)
+        self._hide_alt_tab_checkbox.setChecked(True)
+        self._hide_tray_checkbox.setChecked(False)
+        self._hide_tray_checkbox.setEnabled(False)
+        self._bind_text(self._hide_taskbar_checkbox, "label.hide_taskbar")
+        self._bind_text(self._hide_alt_tab_checkbox, "label.hide_alt_tab")
+        self._bind_text(self._hide_tray_checkbox, "label.hide_tray")
+        self._bind_text(self._hide_tray_checkbox, "tooltip.hide_tray_limited", "setToolTip")
         self._pinned_watcher_interval_spin.setRange(100, 10_000)
         self._pinned_watcher_interval_spin.setSingleStep(100)
         self._pinned_watcher_interval_spin.setSuffix(" ms")
@@ -360,10 +370,12 @@ class MainWindow(QMainWindow):
         self._set_table_headers(self._available_table)
         self._set_table_headers(self._shelf_table)
         self._set_table_headers(self._pinned_table)
+        self._set_table_headers(self._group_table)
         self._show_page(self._stack.currentIndex())
         self._rebuild_group_sidebar()
-        self._populate_managed_cards(self._last_shelf_items)
         self._populate_pinned(self._last_pinned_items)
+        self._populate_group_table(self._last_shelf_items)
+        self._update_selected_window_card()
         for action_id, checkbox in self._hotkey_enabled_checkboxes.items():
             checkbox.setToolTip(
                 tr("tooltip.enable_hotkey", label=self._hotkey_label(action_id).lower())
@@ -372,10 +384,10 @@ class MainWindow(QMainWindow):
     def _set_table_headers(self, table: QTableWidget) -> None:
         table.setHorizontalHeaderLabels(
             [
+                tr("label.table.icon"),
                 tr("label.table.app"),
                 tr("label.table.title"),
-                tr("label.table.pid"),
-                tr("label.table.hwnd"),
+                tr("label.table.state"),
             ]
         )
 
@@ -486,7 +498,12 @@ class MainWindow(QMainWindow):
             self.addAction(page_action)
 
     def _configure_table_context_menus(self) -> None:
-        for table in (self._available_table, self._shelf_table, self._pinned_table):
+        for table in (
+            self._available_table,
+            self._shelf_table,
+            self._pinned_table,
+            self._group_table,
+        ):
             table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             table.customContextMenuRequested.connect(
                 lambda position, current_table=table: self._show_window_context_menu(
@@ -608,40 +625,6 @@ class MainWindow(QMainWindow):
             self._nav_buttons.append(button)
             layout.addWidget(button)
 
-        layout.addSpacing(14)
-        groups_header = QHBoxLayout()
-        groups_label = QLabel()
-        groups_label.setObjectName("SectionTitle")
-        self._bind_text(groups_label, "label.groups")
-        groups_header.addWidget(groups_label)
-        groups_header.addStretch(1)
-        layout.addLayout(groups_header)
-
-        group_actions = QHBoxLayout()
-        group_actions.setSpacing(8)
-        add_group_button = self._make_tool_button(
-            "tooltip.create_group",
-            self._create_group,
-            QStyle.StandardPixmap.SP_FileDialogNewFolder,
-        )
-        rename_group_button = self._make_tool_button(
-            "tooltip.rename_group",
-            self._rename_selected_group,
-            QStyle.StandardPixmap.SP_FileDialogDetailedView,
-        )
-        delete_group_button = self._make_tool_button(
-            "tooltip.delete_group",
-            self._delete_selected_group,
-            QStyle.StandardPixmap.SP_DialogCloseButton,
-        )
-        group_actions.addWidget(add_group_button)
-        group_actions.addWidget(rename_group_button)
-        group_actions.addWidget(delete_group_button)
-        group_actions.addStretch(1)
-        layout.addLayout(group_actions)
-        layout.addWidget(self._groups_container)
-        self._rebuild_group_sidebar()
-
         layout.addStretch(1)
 
         version = QLabel(f"v{APP_VERSION}")
@@ -662,8 +645,9 @@ class MainWindow(QMainWindow):
 
         self._stack.addWidget(self._build_windows_page())
         self._stack.addWidget(self._build_shelf_page())
+        self._stack.addWidget(self._build_pinned_page())
+        self._stack.addWidget(self._build_groups_page())
         self._stack.addWidget(self._build_settings_page())
-        self._stack.addWidget(self._build_safety_page())
         self._stack.addWidget(self._build_about_page())
         layout.addWidget(self._stack, 1)
 
@@ -681,38 +665,9 @@ class MainWindow(QMainWindow):
         title_box.addWidget(self._header_title)
         title_box.addWidget(self._header_subtitle)
 
-        refresh_button = self._make_quick_action_button(
-            "action.refresh",
-            self._refresh,
-            QStyle.StandardPixmap.SP_BrowserReload,
-            "tooltip.refresh",
-        )
-        hide_button = self._make_quick_action_button(
-            "action.hide",
-            self._shelve_selected,
-            QStyle.StandardPixmap.SP_ArrowForward,
-            "tooltip.hide_selected",
-        )
-        restore_button = self._make_quick_action_button(
-            "action.restore_all",
-            self._restore_all,
-            QStyle.StandardPixmap.SP_DialogResetButton,
-            "tooltip.restore_all",
-        )
-        settings_button = self._make_quick_action_button(
-            "action.settings",
-            self._show_settings_page,
-            QStyle.StandardPixmap.SP_FileDialogDetailedView,
-            "tooltip.open_settings",
-        )
-
         layout.addLayout(title_box)
         layout.addStretch(1)
         layout.addWidget(self._loading_label)
-        layout.addWidget(refresh_button)
-        layout.addWidget(hide_button)
-        layout.addWidget(restore_button)
-        layout.addWidget(settings_button)
         return layout
 
     def _build_windows_page(self) -> QWidget:
@@ -721,50 +676,8 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
 
-        available_panel = self._build_open_windows_panel()
-        shelf_panel = self._build_panel(
-            title_key="label.managed_windows",
-            table=self._shelf_table,
-            buttons=[
-                self._make_button(
-                    "action.restore_selected",
-                    lambda: self._restore_selected(self._shelf_table),
-                    primary=True,
-                    icon=QStyle.StandardPixmap.SP_ArrowBack,
-                ),
-                self._make_button(
-                    "action.restore_all_sentence",
-                    self._restore_all,
-                    icon=QStyle.StandardPixmap.SP_DialogResetButton,
-                ),
-            ],
-        )
-        pinned_panel = self._build_panel(
-            title_key="label.pinned_windows",
-            table=self._pinned_table,
-            buttons=[
-                self._make_button(
-                    "action.unpin_selected",
-                    self._unpin_selected,
-                    primary=True,
-                    icon=QStyle.StandardPixmap.SP_DialogResetButton,
-                ),
-                self._make_button(
-                    "action.bring_forward",
-                    lambda: self._bring_selected_forward(self._pinned_table),
-                    icon=QStyle.StandardPixmap.SP_ArrowUp,
-                ),
-            ],
-        )
-        right_column = QWidget()
-        right_layout = QVBoxLayout(right_column)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(16)
-        right_layout.addWidget(shelf_panel, 1)
-        right_layout.addWidget(pinned_panel, 1)
-
-        layout.addWidget(available_panel, 3)
-        layout.addWidget(right_column, 2)
+        layout.addWidget(self._build_open_windows_panel(), 3)
+        layout.addWidget(self._build_selected_window_card(), 1)
         return page
 
     def _build_open_windows_panel(self) -> QFrame:
@@ -795,34 +708,79 @@ class MainWindow(QMainWindow):
         layout.addLayout(control_row)
         layout.addWidget(self._available_table, 1)
         layout.addWidget(self._open_windows_empty_label)
-
-        button_row = QHBoxLayout()
-        button_row.setSpacing(10)
-        button_row.addStretch(1)
-        button_row.addWidget(
-            self._make_button(
-                "action.pin_selected",
-                self._pin_selected,
-                icon=QStyle.StandardPixmap.SP_ArrowUp,
-            )
-        )
-        button_row.addWidget(
-            self._make_button(
-                "action.hide_selected",
-                self._shelve_selected,
-                primary=True,
-                icon=QStyle.StandardPixmap.SP_ArrowForward,
-            )
-        )
-        button_row.addWidget(
-            self._make_button(
-                "action.bring_forward",
-                self._bring_selected_forward,
-                icon=QStyle.StandardPixmap.SP_ArrowUp,
-            )
-        )
-        layout.addLayout(button_row)
         return panel
+
+    def _build_selected_window_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Panel")
+        card.setMinimumWidth(300)
+        card.setMaximumWidth(380)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
+
+        title = QLabel()
+        title.setObjectName("PanelTitle")
+        self._bind_text(title, "label.selected_window")
+
+        identity_row = QHBoxLayout()
+        identity_row.setSpacing(12)
+        text_box = QVBoxLayout()
+        text_box.setSpacing(4)
+        text_box.addWidget(self._selected_window_app)
+        text_box.addWidget(self._selected_window_title)
+        text_box.addWidget(self._selected_window_state)
+        identity_row.addWidget(self._selected_window_icon)
+        identity_row.addLayout(text_box, 1)
+
+        actions_title = QLabel()
+        actions_title.setObjectName("SectionTitle")
+        self._bind_text(actions_title, "label.actions")
+
+        move_button = self._make_button(
+            "action.move_to_shelf",
+            self._shelve_selected,
+            primary=True,
+            icon=QStyle.StandardPixmap.SP_ArrowForward,
+        )
+        pin_button = self._make_button(
+            "action.pin",
+            self._pin_selected,
+            icon=QStyle.StandardPixmap.SP_ArrowUp,
+        )
+        front_button = self._make_button(
+            "action.bring_to_front",
+            self._bring_selected_forward,
+            icon=QStyle.StandardPixmap.SP_ArrowUp,
+        )
+
+        options_title = QLabel()
+        options_title.setObjectName("SectionTitle")
+        self._bind_text(options_title, "label.hide_options")
+
+        tray_note = QLabel()
+        tray_note.setObjectName("Muted")
+        tray_note.setWordWrap(True)
+        self._bind_text(tray_note, "text.tray_hiding_limited")
+
+        layout.addWidget(title)
+        layout.addLayout(identity_row)
+        layout.addWidget(self._selected_window_hint)
+        layout.addWidget(actions_title)
+        layout.addWidget(move_button)
+        layout.addWidget(pin_button)
+        layout.addWidget(front_button)
+        layout.addSpacing(6)
+        layout.addWidget(options_title)
+        layout.addWidget(self._hide_taskbar_checkbox)
+        layout.addWidget(self._hide_alt_tab_checkbox)
+        layout.addWidget(self._hide_tray_checkbox)
+        layout.addWidget(tray_note)
+        layout.addStretch(1)
+        self._update_selected_window_card()
+        return card
+
 
     def _build_shelf_page(self) -> QWidget:
         page = QWidget()
@@ -832,18 +790,141 @@ class MainWindow(QMainWindow):
 
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
-        action_row.addWidget(self._managed_windows_search, 1)
         action_row.addStretch(1)
+        action_row.addWidget(
+            self._make_button(
+                "action.restore",
+                lambda: self._restore_selected(self._shelf_table),
+                primary=True,
+                icon=QStyle.StandardPixmap.SP_ArrowBack,
+            )
+        )
         action_row.addWidget(
             self._make_button(
                 "action.restore_all",
                 self._restore_all,
+                icon=QStyle.StandardPixmap.SP_DialogResetButton,
+            )
+        )
+        layout.addLayout(action_row)
+        layout.addWidget(self._shelf_table, 1)
+        layout.addWidget(self._shelf_empty_label)
+        return page
+
+    def _build_pinned_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        action_row.addStretch(1)
+        action_row.addWidget(
+            self._make_button("action.move_up", lambda: self._move_pinned_selection(-1))
+        )
+        action_row.addWidget(
+            self._make_button("action.move_down", lambda: self._move_pinned_selection(1))
+        )
+        action_row.addWidget(
+            self._make_button(
+                "action.bring_to_front",
+                lambda: self._bring_selected_forward(self._pinned_table),
+                icon=QStyle.StandardPixmap.SP_ArrowUp,
+            )
+        )
+        action_row.addWidget(
+            self._make_button(
+                "action.unpin",
+                self._unpin_selected,
                 primary=True,
                 icon=QStyle.StandardPixmap.SP_DialogResetButton,
             )
         )
         layout.addLayout(action_row)
-        layout.addWidget(self._managed_cards_scroll, 1)
+        layout.addWidget(self._pinned_table, 1)
+        layout.addWidget(self._pinned_empty_label)
+        return page
+
+    def _build_groups_page(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+
+        group_panel = QFrame()
+        group_panel.setObjectName("Panel")
+        group_panel.setMinimumWidth(280)
+        group_panel.setMaximumWidth(360)
+        group_layout = QVBoxLayout(group_panel)
+        group_layout.setContentsMargins(18, 18, 18, 18)
+        group_layout.setSpacing(12)
+
+        group_title = QLabel()
+        group_title.setObjectName("PanelTitle")
+        self._bind_text(group_title, "label.groups")
+
+        group_actions = QVBoxLayout()
+        group_actions.setSpacing(8)
+        group_actions.addWidget(
+            self._make_button("action.new_group", self._create_group, primary=True)
+        )
+        group_actions.addWidget(self._make_button("action.rename", self._rename_selected_group))
+        group_actions.addWidget(self._make_button("action.delete", self._delete_selected_group))
+
+        group_layout.addWidget(group_title)
+        group_layout.addLayout(group_actions)
+        group_layout.addWidget(self._groups_container, 1)
+
+        group_window_button = self._make_button(
+            "action.show_group_taskbar_window",
+            self._group_taskbar_placeholder,
+        )
+        group_window_button.setEnabled(False)
+        self._bind_text(
+            group_window_button,
+            "tooltip.group_taskbar_placeholder",
+            "setToolTip",
+        )
+        group_layout.addWidget(group_window_button)
+
+        windows_panel = QFrame()
+        windows_panel.setObjectName("Panel")
+        windows_layout = QVBoxLayout(windows_panel)
+        windows_layout.setContentsMargins(18, 18, 18, 18)
+        windows_layout.setSpacing(12)
+
+        windows_title = QLabel()
+        windows_title.setObjectName("PanelTitle")
+        self._bind_text(windows_title, "label.group_windows")
+
+        window_actions = QHBoxLayout()
+        window_actions.setSpacing(10)
+        window_actions.addStretch(1)
+        window_actions.addWidget(
+            self._make_button(
+                "action.restore",
+                lambda: self._restore_selected(self._group_table),
+                primary=True,
+                icon=QStyle.StandardPixmap.SP_ArrowBack,
+            )
+        )
+        window_actions.addWidget(
+            self._make_button(
+                "action.restore_all",
+                self._restore_selected_group_windows,
+                icon=QStyle.StandardPixmap.SP_DialogResetButton,
+            )
+        )
+
+        windows_layout.addWidget(windows_title)
+        windows_layout.addWidget(self._group_table, 1)
+        windows_layout.addWidget(self._group_empty_label)
+        windows_layout.addLayout(window_actions)
+
+        layout.addWidget(group_panel)
+        layout.addWidget(windows_panel, 1)
+        self._rebuild_group_sidebar()
         return page
 
     def _build_settings_page(self) -> QWidget:
@@ -1064,54 +1145,6 @@ class MainWindow(QMainWindow):
             [version_label, license_label, privacy_label, storage_label, github_button],
         )
 
-    def _build_safety_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(16)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 8, 0)
-        content_layout.setSpacing(14)
-
-        for title_key, body_key in (
-            ("safety.can.title", "safety.can.body"),
-            ("safety.cannot.title", "safety.cannot.body"),
-            ("safety.why.title", "safety.why.body"),
-            ("safety.restore.title", "safety.restore.body"),
-        ):
-            content_layout.addWidget(self._build_safety_card(title_key, body_key))
-
-        content_layout.addStretch(1)
-        scroll.setWidget(content)
-        layout.addWidget(scroll, 1)
-        return page
-
-    def _build_safety_card(self, title_key: str, body_key: str) -> QFrame:
-        card = QFrame()
-        card.setObjectName("Panel")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(10)
-
-        title = QLabel()
-        title.setObjectName("PanelTitle")
-        self._bind_text(title, title_key)
-
-        body = QLabel()
-        body.setObjectName("Muted")
-        body.setWordWrap(True)
-        self._bind_text(body, body_key)
-
-        layout.addWidget(title)
-        layout.addWidget(body)
-        return card
-
     def _build_about_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1329,39 +1362,6 @@ class MainWindow(QMainWindow):
         self._sync_hotkey_controls()
         return panel
 
-    def _build_panel(
-        self,
-        title_key: str,
-        table: QTableWidget,
-        buttons: list[QPushButton],
-    ) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(13)
-
-        panel_title = QLabel()
-        panel_title.setObjectName("PanelTitle")
-        self._bind_text(panel_title, title_key)
-        layout.addWidget(panel_title)
-        layout.addWidget(table, 1)
-        if table is self._shelf_table:
-            layout.addWidget(self._shelf_empty_label)
-        elif table is self._pinned_table:
-            layout.addWidget(self._pinned_empty_label)
-
-        button_row = QHBoxLayout()
-        button_row.setSpacing(10)
-        button_row.addStretch(1)
-        for button in buttons:
-            button_row.addWidget(button)
-        layout.addLayout(button_row)
-
-        return panel
-
     def _build_table(self) -> QTableWidget:
         table = QTableWidget(0, 4)
         self._set_table_headers(table)
@@ -1378,10 +1378,11 @@ class MainWindow(QMainWindow):
         table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         table.verticalHeader().setDefaultSectionSize(38)
         table.horizontalHeader().setHighlightSections(False)
-        table.horizontalHeader().setMinimumSectionSize(72)
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setMinimumSectionSize(48)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(0, 44)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         return table
 
@@ -1403,44 +1404,10 @@ class MainWindow(QMainWindow):
         button.clicked.connect(callback)  # type: ignore[arg-type]
         return button
 
-    def _make_tool_button(
-        self,
-        tooltip_key: str,
-        callback: object,
-        icon: QStyle.StandardPixmap,
-    ) -> QToolButton:
-        button = QToolButton()
-        button.setObjectName("ToolIconButton")
-        button.setIcon(self.style().standardIcon(icon))
-        button.setIconSize(QSize(18, 18))
-        button.setFixedSize(34, 34)
-        self._bind_text(button, tooltip_key, "setToolTip")
-        self._bind_text(button, tooltip_key, "setAccessibleName")
-        button.clicked.connect(callback)  # type: ignore[arg-type]
-        return button
-
-    def _make_quick_action_button(
-        self,
-        text_key: str,
-        callback: object,
-        icon: QStyle.StandardPixmap,
-        tooltip_key: str,
-    ) -> QPushButton:
-        button = QPushButton()
-        button.setObjectName("IconButton")
-        button.setIcon(self.style().standardIcon(icon))
-        button.setIconSize(QSize(17, 17))
-        self._bind_text(button, text_key)
-        self._bind_text(button, tooltip_key, "setToolTip")
-        button.clicked.connect(callback)  # type: ignore[arg-type]
-        return button
-
     def _show_page(self, page: int) -> None:
         if hasattr(self, "_stack"):
             self._stack.setCurrentIndex(page)
             self._animate_page(self._stack.currentWidget())
-            if page == 1 and self._managed_cards_dirty:
-                self._populate_managed_cards(self._last_shelf_items)
             if hasattr(self, "_open_windows_refresh_timer"):
                 self._configure_open_windows_auto_refresh(
                     self._settings.open_windows_auto_refresh
@@ -1457,7 +1424,7 @@ class MainWindow(QMainWindow):
             button.style().polish(button)
 
     def _show_settings_page(self, _checked: bool = False) -> None:
-        self._show_page(2)
+        self._show_page(4)
 
     def _animate_page(self, widget: QWidget | None) -> None:
         if widget is None:
@@ -1487,8 +1454,6 @@ class MainWindow(QMainWindow):
         current_page = self._stack.currentIndex()
         if current_page == 0:
             return self._open_windows_search
-        if current_page == 1:
-            return self._managed_windows_search
         return None
 
     def _apply_adaptive_layout(self) -> None:
@@ -1569,8 +1534,8 @@ class MainWindow(QMainWindow):
         self._settings.selected_group_id = self._selected_group_id
         self._settings_store.save(self._settings, reason="selected group changed")
         self._sync_group_button_state()
-        self._populate_managed_cards(self._last_shelf_items)
-        self._show_page(1)
+        self._populate_group_table(self._last_shelf_items)
+        self._show_page(3)
 
     def _create_group(self) -> None:
         name, accepted = QInputDialog.getText(
@@ -1588,7 +1553,7 @@ class MainWindow(QMainWindow):
         self._selected_group_id = group.id
         self._persist_managed_state("group created")
         self._refresh()
-        self._show_page(1)
+        self._show_page(3)
 
     def _rename_selected_group(self) -> None:
         current_group = self._group_by_id(self._selected_group_id)
@@ -1629,6 +1594,7 @@ class MainWindow(QMainWindow):
         self._selected_group_id = DEFAULT_GROUP_ID
         self._persist_managed_state("group deleted")
         self._refresh()
+        self._show_page(3)
 
     def _group_by_id(self, group_id: str) -> WindowGroup | None:
         for group in self._shelf_service.groups():
@@ -1642,9 +1608,23 @@ class MainWindow(QMainWindow):
                 self._selected_group_id = group_id
                 self._persist_managed_state("window assigned to group")
                 self._refresh()
+                self._show_page(3)
                 self.statusBar().showMessage(tr("status.moved_to_group"))
         except ShelfyGAIError as exc:
             self._show_error(str(exc))
+
+    def _restore_selected_group_windows(self) -> None:
+        handles = self._selected_handles(self._group_table)
+        if not handles:
+            handles = [
+                item.window.handle
+                for item in self._last_shelf_items
+                if item.group_id == self._selected_group_id
+            ]
+        self._restore_handles(handles)
+
+    def _group_taskbar_placeholder(self) -> None:
+        self.statusBar().showMessage(tr("status.group_taskbar_placeholder"))
 
     def _set_loading(self, enabled: bool, message: str = "") -> None:
         self._loading_label.setText(message)
@@ -1664,6 +1644,7 @@ class MainWindow(QMainWindow):
 
             available_started = perf_counter()
             available_windows = tuple(self._shelf_service.available_windows())
+            self._last_available_windows = available_windows
             available_ms = elapsed_ms(available_started)
 
             shelf_items = tuple(self._shelf_service.shelved_items())
@@ -1675,11 +1656,9 @@ class MainWindow(QMainWindow):
             self._populate_available(available_windows)
             self._populate_shelf(self._shelf_table, shelf_items)
             self._populate_pinned(pinned_items)
-            if self._stack.currentIndex() == 1:
-                self._populate_managed_cards(shelf_items)
-            else:
-                self._managed_cards_dirty = True
+            self._populate_group_table(shelf_items)
             self._rebuild_group_sidebar()
+            self._update_selected_window_card()
             populate_ms = elapsed_ms(populate_started)
 
             available_count = self._available_table.rowCount()
@@ -1722,6 +1701,7 @@ class MainWindow(QMainWindow):
     def _populate_available(self, windows: Sequence[WindowInfo]) -> None:
         self._populate_table(self._available_table, windows)
         self._apply_open_windows_filter()
+        self._update_selected_window_card()
 
     def _populate_shelf(
         self,
@@ -1739,8 +1719,10 @@ class MainWindow(QMainWindow):
             )
 
     def _populate_pinned(self, items: Sequence[PinnedItem]) -> None:
-        windows = [item.window for item in items]
+        ordered_items = self._ordered_pinned_items(items)
+        windows = [item.window for item in ordered_items]
         self._populate_table(self._pinned_table, windows)
+        self._pinned_table.setSortingEnabled(False)
         self._apply_table_icons(self._pinned_table)
         self._update_table_empty_state(
             self._pinned_table,
@@ -1749,125 +1731,58 @@ class MainWindow(QMainWindow):
         )
         self._configure_pinned_watcher()
 
-    def _populate_managed_cards(self, items: Sequence[ShelfItem]) -> None:
-        self._clear_layout(self._managed_cards_layout)
-        grouped: dict[str, list[ShelfItem]] = {}
-        query = self._managed_windows_search.text().strip().lower()
-        visible_items = [
-            item
-            for item in items
-            if item.group_id == self._selected_group_id and self._managed_item_matches(item, query)
-        ]
-        self._icon_provider.preload_windows([item.window for item in visible_items])
-        for item in visible_items:
-            grouped.setdefault(item.window.process_name, []).append(item)
+    def _ordered_pinned_items(self, items: Sequence[PinnedItem]) -> list[PinnedItem]:
+        by_handle = {item.window.handle: item for item in items}
+        self._pinned_order = [handle for handle in self._pinned_order if handle in by_handle]
+        for item in items:
+            if item.window.handle not in self._pinned_order:
+                self._pinned_order.append(item.window.handle)
+        return [by_handle[handle] for handle in self._pinned_order if handle in by_handle]
 
-        if not grouped:
-            group = self._group_by_id(self._selected_group_id)
-            group_name = self._group_display_name(group)
-            message = tr(
-                "empty.managed_group_search" if query else "empty.managed_group",
-                group=group_name,
-            )
-            empty_label = QLabel(message)
-            empty_label.setObjectName("EmptyState")
-            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty_label.setWordWrap(True)
-            empty_label.setMinimumHeight(96)
-            self._managed_cards_layout.addWidget(empty_label)
-            self._managed_cards_layout.addStretch(1)
-            self._animate_managed_cards()
-            self._managed_cards_dirty = False
+    def _populate_group_table(self, items: Sequence[ShelfItem]) -> None:
+        windows = [
+            item.window
+            for item in items
+            if item.group_id == self._selected_group_id
+        ]
+        self._populate_table(self._group_table, windows)
+        self._apply_table_icons(self._group_table)
+        group = self._group_by_id(self._selected_group_id)
+        group_name = self._group_display_name(group)
+        self._update_table_empty_state(
+            self._group_table,
+            self._group_empty_label,
+            tr("empty.group_windows", group=group_name),
+        )
+
+    def _selected_available_window(self) -> WindowInfo | None:
+        handles = self._selected_handles(self._available_table)
+        if not handles:
+            return None
+        selected = handles[0]
+        for window in self._last_available_windows:
+            if window.handle == selected:
+                return window
+        return None
+
+    def _update_selected_window_card(self) -> None:
+        window = self._selected_available_window()
+        if window is None:
+            self._selected_window_icon.setPixmap(self._app_icon.pixmap(24, 24))
+            self._selected_window_app.setText(tr("selected.none.title"))
+            self._selected_window_title.setText(tr("selected.none.body"))
+            self._selected_window_state.setText("")
+            self._selected_window_hint.setVisible(True)
+            self._selected_window_hint.setText(tr("selected.none.hint"))
             return
 
-        for process_name, group_items in sorted(grouped.items(), key=lambda pair: pair[0].lower()):
-            self._managed_cards_layout.addWidget(
-                self._build_managed_group_card(process_name, group_items)
-            )
-        self._managed_cards_layout.addStretch(1)
-        self._animate_managed_cards()
-        self._managed_cards_dirty = False
-
-    def _managed_item_matches(self, item: ShelfItem, query: str) -> bool:
-        if not query:
-            return True
-        window = item.window
-        values = (
-            window.process_name,
-            window.title,
-            str(window.process_id),
-            f"0x{window.handle:08X}",
+        self._selected_window_icon.setPixmap(
+            self._icon_pixmap(window, 24, self._selected_window_icon)
         )
-        return query in " ".join(values).lower()
-
-    def _build_managed_group_card(self, process_name: str, items: list[ShelfItem]) -> QFrame:
-        card = QFrame()
-        card.setObjectName("ManagedGroupCard")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 18, 18, 14)
-        layout.setSpacing(11)
-
-        first_window = items[0].window
-        header = QHBoxLayout()
-
-        icon_label = QLabel()
-        icon_label.setObjectName("IconBadge")
-        icon_label.setFixedSize(34, 34)
-        icon_label.setPixmap(self._icon_pixmap(first_window, 24, icon_label))
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        title_box = QVBoxLayout()
-        app_label = QLabel(process_name)
-        app_label.setObjectName("CardTitle")
-        count_label = QLabel(tr("label.hidden_count", count=len(items)))
-        count_label.setObjectName("Muted")
-        title_box.addWidget(app_label)
-        title_box.addWidget(count_label)
-
-        header.addWidget(icon_label)
-        header.addLayout(title_box)
-        header.addStretch(1)
-        layout.addLayout(header)
-
-        for item in items:
-            layout.addWidget(self._build_managed_window_row(item))
-
-        return card
-
-    def _build_managed_window_row(self, item: ShelfItem) -> QWidget:
-        row = DraggableManagedWindowRow(item.window.handle)
-        row.setObjectName("ManagedWindowRow")
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 11, 0, 0)
-        layout.setSpacing(12)
-
-        icon_label = QLabel()
-        icon_label.setObjectName("IconBadge")
-        icon_label.setFixedSize(30, 30)
-        icon_label.setPixmap(self._icon_pixmap(item.window, 20, icon_label))
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        title_box = QVBoxLayout()
-        title = QLabel(item.window.title)
-        title.setWordWrap(True)
-        meta = QLabel(
-            tr("label.pid_hwnd", pid=item.window.process_id, hwnd=f"0x{item.window.handle:08X}")
-        )
-        meta.setObjectName("Muted")
-        title_box.addWidget(title)
-        title_box.addWidget(meta)
-
-        restore_button = QPushButton()
-        restore_button.setText(tr("action.restore"))
-        restore_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
-        restore_button.clicked.connect(
-            lambda _checked=False, handle=item.window.handle: self._restore_handles([handle])
-        )
-
-        layout.addWidget(icon_label)
-        layout.addLayout(title_box, 1)
-        layout.addWidget(restore_button)
-        return row
+        self._selected_window_app.setText(window.process_name)
+        self._selected_window_title.setText(window.title)
+        self._selected_window_state.setText(self._window_state_text(self._available_table, window))
+        self._selected_window_hint.setVisible(False)
 
     def _icon_for_window(self, window: WindowInfo, *, queue: bool = True) -> QIcon:
         return self._icon_provider.icon_for_window(window, queue=queue)
@@ -1882,19 +1797,6 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
 
-    def _animate_managed_cards(self) -> None:
-        effect = QGraphicsOpacityEffect(self._managed_cards_container)
-        self._managed_cards_container.setGraphicsEffect(effect)
-        self._card_animation = QPropertyAnimation(effect, b"opacity", self)
-        self._card_animation.setDuration(140)
-        self._card_animation.setStartValue(0.0)
-        self._card_animation.setEndValue(1.0)
-        self._card_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._card_animation.finished.connect(
-            lambda: self._managed_cards_container.setGraphicsEffect(None)
-        )
-        self._card_animation.start()
-
     def _populate_table(self, table: QTableWidget, windows: Sequence[WindowInfo]) -> None:
         table.setUpdatesEnabled(False)
         table.setSortingEnabled(False)
@@ -1903,12 +1805,19 @@ class MainWindow(QMainWindow):
         try:
             for row, window in enumerate(windows):
                 values = [
+                    "",
                     window.process_name,
                     window.title,
-                    str(window.process_id),
-                    f"0x{window.handle:08X}",
+                    self._window_state_text(table, window),
                 ]
-                filter_text = " ".join(values).lower()
+                filter_text = " ".join(
+                    [
+                        window.process_name,
+                        window.title,
+                        str(window.process_id),
+                        f"0x{window.handle:08X}",
+                    ]
+                ).lower()
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(value)
                     item.setData(HANDLE_ROLE, window.handle)
@@ -1917,23 +1826,28 @@ class MainWindow(QMainWindow):
                     item.setToolTip(value)
                     if column == 0:
                         item.setIcon(self._icon_for_window(window, queue=False))
-                    if column >= 2:
+                    if column == 3:
                         item.setTextAlignment(
-                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                            Qt.AlignmentFlag.AlignCenter
                         )
                     table.setItem(row, column, item)
         finally:
             table.setSortingEnabled(True)
             table.setUpdatesEnabled(True)
 
+    def _window_state_text(self, table: QTableWidget, window: WindowInfo) -> str:
+        if table is self._available_table:
+            return tr("state.minimized" if window.is_minimized else "state.open")
+        if table is self._pinned_table:
+            return tr("state.pinned")
+        return tr("state.on_shelf")
+
     def _refresh_cached_icons(self) -> None:
         self._apply_table_icons(self._available_table, visible_only=True)
         self._apply_table_icons(self._shelf_table)
         self._apply_table_icons(self._pinned_table)
-        if self._stack.currentIndex() == 1:
-            self._populate_managed_cards(self._last_shelf_items)
-        else:
-            self._managed_cards_dirty = True
+        self._apply_table_icons(self._group_table)
+        self._update_selected_window_card()
         self._rebuild_group_sidebar()
 
     def _apply_table_icons(self, table: QTableWidget, *, visible_only: bool = False) -> None:
@@ -1967,6 +1881,7 @@ class MainWindow(QMainWindow):
             empty_text,
             visible_count=visible_count,
         )
+        self._update_selected_window_card()
 
     def _update_table_empty_state(
         self,
@@ -2241,7 +2156,7 @@ class MainWindow(QMainWindow):
             bring_action.triggered.connect(
                 lambda _checked=False: self._bring_handles_forward(handles)
             )
-        elif table is self._shelf_table:
+        elif table in (self._shelf_table, self._group_table):
             restore_action = menu.addAction(tr("action.restore_selected"))
             restore_action.triggered.connect(
                 lambda _checked=False: self._restore_handles(handles)
@@ -2302,6 +2217,30 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(tr("status.select_pinned_unpin"))
             return
         self._unpin_handles(handles)
+
+    def _move_pinned_selection(self, direction: int) -> None:
+        handles = self._selected_handles(self._pinned_table)
+        if not handles:
+            self.statusBar().showMessage(tr("status.select_pinned_unpin"))
+            return
+        handle = handles[0]
+        if handle not in self._pinned_order:
+            return
+        index = self._pinned_order.index(handle)
+        target = index + direction
+        if target < 0 or target >= len(self._pinned_order):
+            return
+        self._pinned_order[index], self._pinned_order[target] = (
+            self._pinned_order[target],
+            self._pinned_order[index],
+        )
+        self._populate_pinned(self._last_pinned_items)
+        for row in range(self._pinned_table.rowCount()):
+            item = self._pinned_table.item(row, 0)
+            if item is not None and item.data(HANDLE_ROLE) == handle:
+                self._pinned_table.selectRow(row)
+                break
+        self.statusBar().showMessage(tr("status.pinned_order_changed"))
 
     def _unpin_handles(self, handles: list[int]) -> tuple[int, int]:
         if not handles:
@@ -3154,64 +3093,3 @@ def _startup_status_text(status: object) -> str:
         return tr("startup.status.enabled_silent")
     return tr("startup.status.enabled")
 
-
-class GroupButton(QPushButton):
-    windowDropped = Signal(int, str)
-
-    def __init__(self, group_id: str, label: str) -> None:
-        super().__init__(label)
-        self.group_id = group_id
-        self.setAcceptDrops(True)
-
-    def dragEnterEvent(self, event: object) -> None:
-        if _drag_has_window_handle(event):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event: object) -> None:
-        handle = _window_handle_from_drop(event)
-        if handle is None:
-            event.ignore()
-            return
-        self.windowDropped.emit(handle, self.group_id)
-        event.acceptProposedAction()
-
-
-class DraggableManagedWindowRow(QFrame):
-    def __init__(self, handle: int) -> None:
-        super().__init__()
-        self._handle = handle
-        self._drag_start_position = QPoint()
-
-    def mousePressEvent(self, event: object) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_position = event.position().toPoint()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: object) -> None:
-        if not event.buttons() & Qt.MouseButton.LeftButton:
-            return
-        distance = (event.position().toPoint() - self._drag_start_position).manhattanLength()
-        if distance < QApplication.startDragDistance():
-            return
-
-        mime_data = QMimeData()
-        mime_data.setData(WINDOW_HANDLE_MIME, str(self._handle).encode("ascii"))
-
-        drag = QDrag(self)
-        drag.setMimeData(mime_data)
-        drag.exec(Qt.DropAction.MoveAction)
-
-
-def _drag_has_window_handle(event: object) -> bool:
-    return event.mimeData().hasFormat(WINDOW_HANDLE_MIME)
-
-
-def _window_handle_from_drop(event: object) -> int | None:
-    if not _drag_has_window_handle(event):
-        return None
-    try:
-        return int(bytes(event.mimeData().data(WINDOW_HANDLE_MIME)).decode("ascii"))
-    except ValueError:
-        return None

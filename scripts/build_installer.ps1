@@ -51,4 +51,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $InstallerOutput = Join-Path $ProjectRoot "dist\installer"
-Write-Host "Installer output: $InstallerOutput"
+$InstallerFile = Join-Path $InstallerOutput "ShelfyGAI-Setup-v0.1.0.exe"
+if (-not (Test-Path -LiteralPath $InstallerFile)) {
+    throw "Expected installer was not created: $InstallerFile"
+}
+Write-Host "Installer output: $InstallerFile"

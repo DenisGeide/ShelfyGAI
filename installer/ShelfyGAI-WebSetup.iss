@@ -1,16 +1,17 @@
-; ShelfyGAI web installer bootstrapper.
-; Produces one small EXE that downloads the full offline installer from a
-; GitHub Release URL, verifies an optional SHA-256 hash, then launches it.
+; ShelfyGAI experimental web installer bootstrapper.
+; Maintainer-only alpha artifact. Produces one small EXE that downloads the
+; full offline installer from a GitHub Release URL, verifies an optional
+; SHA-256 hash, then launches it.
 
 #define MyAppName "ShelfyGAI"
 #define MyAppVersion "0.1.0"
 #define MyAppVersionInfo "0.1.0.0"
 #define MyAppPublisher "ShelfyGAI contributors"
-#define MyAppURL "https://github.com/shelfygai/shelfygai"
-#define MyAppInstallerName "ShelfyGAI-Setup-0.1.0.exe"
+#define MyAppURL "https://github.com/DenisGeide/ShelfyGAI"
+#define MyAppInstallerName "ShelfyGAI-Setup-v0.1.0.exe"
 
 #ifndef MyAppDownloadURL
-#define MyAppDownloadURL "https://github.com/shelfygai/shelfygai/releases/download/v0.1.0/ShelfyGAI-Setup-0.1.0.exe"
+#define MyAppDownloadURL "https://github.com/DenisGeide/ShelfyGAI/releases/download/v0.1.0-alpha/ShelfyGAI-Setup-v0.1.0.exe"
 #endif
 
 #ifndef MyAppDownloadSHA256
@@ -42,7 +43,7 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 VersionInfoVersion={#MyAppVersionInfo}
 VersionInfoCompany={#MyAppPublisher}
-VersionInfoDescription=ShelfyGAI web installer
+VersionInfoDescription=ShelfyGAI experimental web installer
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 CloseApplications=no

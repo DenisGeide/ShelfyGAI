@@ -67,7 +67,7 @@ ShelfyGAI has no telemetry, analytics, ads, cloud sync, or background service wi
 
 Please report bugs through GitHub Issues:
 
-- [https://github.com/shelfygai/shelfygai/issues](https://github.com/shelfygai/shelfygai/issues)
+- [https://github.com/DenisGeide/ShelfyGAI/issues](https://github.com/DenisGeide/ShelfyGAI/issues)
 
 Helpful reports include:
 

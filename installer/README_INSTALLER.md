@@ -51,18 +51,24 @@ From the repository root:
 Expected output:
 
 ```text
-dist\installer\ShelfyGAI-Setup-0.1.0.exe
+dist\installer\ShelfyGAI-Setup-v0.1.0.exe
 ```
 
-## Build the One-File Web Installer
+This full Inno Setup installer is the recommended normal-user release artifact.
+Users download one `.exe`, run it, and do not need Python, pip, Git, or source
+code.
 
-For the simplest user download, build the small web installer after the full
-offline installer has been attached to a GitHub release:
+## Experimental Web Installer Bootstrapper
+
+The web installer is experimental and is not the public alpha installer. Keep it
+unpublished unless maintainers explicitly decide to support a downloader
+bootstrapper. Build it only after the full installer has been attached to a
+GitHub release:
 
 ```powershell
-Get-FileHash .\dist\installer\ShelfyGAI-Setup-0.1.0.exe -Algorithm SHA256
+Get-FileHash .\dist\installer\ShelfyGAI-Setup-v0.1.0.exe -Algorithm SHA256
 .\scripts\build_web_installer.ps1 `
-  -DownloadUrl "https://github.com/shelfygai/shelfygai/releases/download/v0.1.0/ShelfyGAI-Setup-0.1.0.exe" `
+  -DownloadUrl "https://github.com/DenisGeide/ShelfyGAI/releases/download/v0.1.0-alpha/ShelfyGAI-Setup-v0.1.0.exe" `
   -DownloadSha256 "<64-character-sha256>"
 ```
 
@@ -72,15 +78,16 @@ Expected output:
 dist\installer\ShelfyGAI-WebSetup-0.1.0.exe
 ```
 
-This file downloads and launches the full offline installer. See
-`installer\README_WEB_INSTALLER.md`.
+This file downloads and launches the full offline installer. It is maintainer
+documentation only; normal users should download `ShelfyGAI-Setup-v0.1.0.exe`.
+See `installer\README_WEB_INSTALLER.md`.
 
 ## Install Behavior
 
 - Uses Inno Setup's automatic Program Files/user-local install directory.
 - Allows the user to choose an all-users or current-user install when supported.
 - Creates a Start Menu shortcut.
-- Offers an optional desktop shortcut.
+- Creates a desktop shortcut by default.
 - Adds standard Windows uninstall support.
 - Offers to launch ShelfyGAI after install.
 - Does not enable Windows autostart during installation.

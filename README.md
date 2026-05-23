@@ -1,119 +1,110 @@
 # ShelfyGAI
 
-ShelfyGAI is an open-source Windows productivity utility for taskbar organization
-and cleaner desktop workspaces. It lets you move selected application windows
-into a local shelf so your taskbar and Alt+Tab view stay focused while the
-applications continue running. You can restore individual windows, the latest
-shelved window, or everything at once.
+<p align="center">
+  <a href="https://github.com/DenisGeide/ShelfyGAI/releases/latest/download/ShelfyGAI-Setup-v0.1.0.exe">
+    <img alt="Download ShelfyGAI for Windows" src="https://img.shields.io/badge/Download%20for%20Windows-ShelfyGAI--Setup--v0.1.0.exe-2f81f7?style=for-the-badge&logo=windows">
+  </a>
+</p>
 
-ShelfyGAI is local-first: no telemetry, no ads, no cloud sync, and no background
-service installed without user action.
+<p align="center">
+  <strong>One Windows installer. No Python, pip, or Git required.</strong><br>
+  <a href="https://github.com/DenisGeide/ShelfyGAI/releases/latest/download/ShelfyGAI-Setup-v0.1.0.exe">Direct download: ShelfyGAI-Setup-v0.1.0.exe</a>
+</p>
 
-## English
+ShelfyGAI is a simple open-source Windows window organizer. It helps you move
+selected application windows to a Shelf, keep important windows above others,
+and reduce taskbar clutter without closing your apps.
 
-### Project Description
+ShelfyGAI is local-first: settings and logs stay on your computer. There is no
+telemetry, advertising, account system, cloud sync, or background service
+installed without user action.
 
-ShelfyGAI is built for people who keep many applications open and want a calmer
-Windows desktop. It organizes ordinary top-level application windows into a
-reversible shelf, with groups, search, tray actions, startup preferences, safety
-guardrails, and emergency recovery.
+## Screenshots
 
-Supported platforms:
+Screenshots should be updated before every public release. The paths below are
+reserved for release assets. The current UI is organized into Open windows,
+Shelf, Pinned, Groups, Settings, and About.
 
-- Windows 10
-- Windows 11
+**Main window - Open windows**
 
-### Features
+![Main window - Open windows](docs/assets/screenshots/01-main-open-windows.png)
 
-- Move selected open windows out of the Windows taskbar and Alt+Tab.
-- Restore selected windows, the latest shelved window, or all managed windows.
-- Pin selected windows so they stay above other windows, with optional
-  minimize prevention.
-- Group managed windows into folders, including the default Ungrouped group.
-- Search open windows and managed windows.
-- Show application icons extracted from executable files, with safe fallbacks.
-- Use a modern dark PySide6 interface with sidebar navigation.
-- Reopen Settings later and change theme, language, accent color, startup,
-  tray, hotkey, and safety preferences.
-- Switch language between English and Russian.
-- Use optional system tray actions: Open ShelfyGAI, Restore All Windows,
-  Settings, and Quit.
-- Configure global hotkeys using Windows `RegisterHotKey`.
-- Enable current-user Windows startup integration through the HKCU Run key.
-- Keep settings, logs, and recovery state under `%APPDATA%\ShelfyGAI`.
-- Use emergency recovery on next startup if a previous session ended while
-  windows were still managed.
+**Shelf page**
 
-### Screenshots
+![Shelf page](docs/assets/screenshots/02-shelf.png)
 
-Screenshots will be added as public preview builds stabilize. Placeholder paths
-are reserved now so release notes, the README, and GitHub discussions can use a
-consistent asset layout.
+**Pinned windows page**
 
-| View | Placeholder |
-| --- | --- |
-| Main window screenshot | `docs/assets/screenshots/main-window.png` |
-| Settings screenshot | `docs/assets/screenshots/settings.png` |
-| Managed windows screenshot | `docs/assets/screenshots/managed-windows.png` |
-| Tray menu screenshot | `docs/assets/screenshots/tray-menu.png` |
-| Language switch screenshot | `docs/assets/screenshots/language-switch.png` |
+![Pinned windows page](docs/assets/screenshots/03-pinned.png)
 
-Recommended screenshot sizes:
+**Groups page**
 
-- Main README screenshots: `1600x1000` or `1440x900`.
-- Wide release preview crops: `1920x1080`.
-- Tray menu screenshots: crop around the tray menu, usually `900x700` or
-  smaller.
+![Groups page](docs/assets/screenshots/04-groups.png)
 
-See [docs/assets/screenshots/README.md](docs/assets/screenshots/README.md) for
-capture guidance.
+**Group taskbar window**
 
-### Demo Placeholder
+![Group taskbar window](docs/assets/screenshots/05-taskbar-group-window.png)
 
-Demo assets will live in `docs/assets/demo/`.
+**Settings page**
 
-| Asset | Placeholder |
-| --- | --- |
-| Short demo GIF | `docs/assets/demo/shelfygai-demo.gif` |
-| Optional source video | `docs/assets/demo/shelfygai-demo.mp4` |
+![Settings page](docs/assets/screenshots/06-settings.png)
 
-Recommended demo GIF:
+**Tray menu**
 
-- 10 to 20 seconds.
-- Capture ShelfyGAI at about `1280x800` or `1440x900`.
-- Keep the GIF under roughly 10 MB when possible.
-- Record MP4 first, then convert to GIF for README embedding.
+![Tray menu](docs/assets/screenshots/07-tray-menu.png)
 
-Suggested demo scenarios:
+**EN/RU language switch**
 
-- Search open windows, select one, and move it into ShelfyGAI.
-- Show managed windows grouped into cards.
-- Restore a selected managed window.
-- Open Settings and switch language between English and Russian.
-- Open the tray menu and show Restore All Windows.
+![EN/RU language switch](docs/assets/screenshots/08-language-switch.png)
 
-See [docs/assets/demo/README.md](docs/assets/demo/README.md) for recording and
-conversion notes.
+**Installer**
 
-### Installation
+![Installer](docs/assets/screenshots/09-installer.png)
 
-When releases are published, use the installer from the project releases page.
-The installer:
+Screenshot planning notes are in
+[docs/assets/screenshots/README.md](docs/assets/screenshots/README.md).
 
-- Installs ShelfyGAI to Program Files or a user-local app directory.
-- Creates a Start Menu shortcut.
-- Offers an optional desktop shortcut.
-- Supports normal Windows uninstall.
-- Does not enable autostart by default.
-- Preserves `%APPDATA%\ShelfyGAI` across upgrades and uninstall/reinstall cycles.
+## Features
 
-You can also use the onedir package created by PyInstaller:
+- Move selected windows to the Shelf.
+- Hide shelved windows from the Windows taskbar.
+- Hide shelved windows from Alt+Tab when supported by the target window.
+- Restore one window, the last shelved window, or everything safely.
+- Pin windows above other windows.
+- Create groups to organize shelved windows.
+- Optionally show a ShelfyGAI-owned group window as one Windows taskbar item.
+- Use English or Russian interface text.
+- Save settings locally under `%APPDATA%\ShelfyGAI`.
+- Keep logs locally under `%APPDATA%\ShelfyGAI\logs`.
+
+## Installation
+
+For normal users, the recommended public alpha download is one offline installer:
 
 ```text
-dist\ShelfyGAI\ShelfyGAI.exe
+ShelfyGAI-Setup-v0.1.0.exe
 ```
 
-### Running From Source
+Download it from GitHub Releases, run it, and open ShelfyGAI from the Start
+Menu. You do not need Python, pip, Git, or source code.
+
+The installer:
+
+- creates a Start Menu shortcut
+- creates a desktop shortcut by default
+- adds a normal Windows uninstaller
+- does not enable launch with Windows by default
+- keeps user settings in `%APPDATA%\ShelfyGAI`
+
+See [docs/INSTALL_FOR_USERS.md](docs/INSTALL_FOR_USERS.md) for the short user
+install guide.
+
+## Run From Source
+
+Requirements:
+
+- Windows 10 or Windows 11
+- Python 3.11 or newer
 
 ```powershell
 py -3.11 -m venv .venv
@@ -123,7 +114,7 @@ python -m pip install -e .
 python -m shelfygai
 ```
 
-For development:
+For development checks:
 
 ```powershell
 python -m pip install -e ".[dev]"
@@ -131,236 +122,210 @@ python -m ruff check .
 python -m pytest
 ```
 
-### Building Executable
+## Build
 
-PyInstaller packaging creates a Windows onedir build:
+Build the standalone app folder:
 
 ```powershell
 python -m pip install -e ".[build]"
 .\scripts\build_exe.ps1 -Clean
 ```
 
-Output:
+Expected output:
 
 ```text
 dist\ShelfyGAI\ShelfyGAI.exe
 ```
 
-To verify the packaged application can start, load translations, load resources,
-write settings, and write logs:
-
-```powershell
-.\scripts\build_exe.ps1 -Clean -SmokeTest
-```
-
-### Building Installer
-
-Install Inno Setup 6, then run:
-
-```powershell
-.\scripts\build_installer.ps1
-```
-
-If the executable is already built:
+Build the Windows installer with Inno Setup:
 
 ```powershell
 .\scripts\build_installer.ps1 -SkipExeBuild
 ```
 
-Expected installer output:
+Expected output:
 
 ```text
-dist\installer\ShelfyGAI-Setup-0.1.0.exe
+dist\installer\ShelfyGAI-Setup-v0.1.0.exe
 ```
 
-See [docs/PACKAGING.md](docs/PACKAGING.md) and
-[installer/README_INSTALLER.md](installer/README_INSTALLER.md).
+Maintainer build notes are in [docs/BUILD_RELEASE.md](docs/BUILD_RELEASE.md),
+[docs/BUILD.md](docs/BUILD.md), and [docs/INSTALLER.md](docs/INSTALLER.md).
 
-For the simplest public download, maintainers can also publish a small one-file
-web installer:
+## How It Works
 
-```powershell
-.\scripts\build_web_installer.ps1 `
-  -DownloadUrl "https://github.com/shelfygai/shelfygai/releases/download/v0.1.0/ShelfyGAI-Setup-0.1.0.exe" `
-  -DownloadSha256 "<64-character-sha256>"
-```
+ShelfyGAI enumerates normal top-level Windows application windows and lets the
+user choose what to do with a selected window.
 
-Output:
+When a window is moved to the Shelf, ShelfyGAI stores the original window style
+and applies reversible Windows extended-style changes. It can remove
+`WS_EX_APPWINDOW` for taskbar visibility and add `WS_EX_TOOLWINDOW` for Alt+Tab
+visibility. On restore, ShelfyGAI writes the original style back.
 
-```text
-dist\installer\ShelfyGAI-WebSetup-0.1.0.exe
-```
+Pinning uses `SetWindowPos(hwnd, HWND_TOPMOST, ...)`. Unpinning uses
+`HWND_NOTOPMOST`, and ShelfyGAI cleans up pinned windows on exit by default.
 
-The web installer downloads the full offline installer from GitHub Releases and
-then launches it. The offline installer remains available for users who need a
-no-network install path.
+Groups are managed inside ShelfyGAI. Optional group taskbar windows are normal
+ShelfyGAI-owned windows that represent a group safely without modifying the
+Windows shell.
 
-### How It Works Technically
+## Safety
 
-ShelfyGAI uses Windows APIs to enumerate user-facing top-level windows and to
-adjust reversible extended window styles. When a window is moved into the shelf,
-ShelfyGAI:
+ShelfyGAI is designed to keep windows recoverable:
 
-1. Enumerates top-level windows with WinAPI calls.
-2. Filters out empty-title windows, system shell surfaces, Start Menu surfaces,
-   protected system windows, ShelfyGAI itself, and other unsafe targets.
-3. Reads the original extended style with `GetWindowLong`.
-4. Stores the original style in memory and in local recovery state while needed.
-5. Removes `WS_EX_APPWINDOW`.
-6. Adds `WS_EX_TOOLWINDOW`.
-7. Calls `SetWindowLong` and `SetWindowPos` with `SWP_FRAMECHANGED`.
+- it does not close target apps when moving windows to the Shelf
+- it avoids managing its own windows
+- it avoids Windows taskbar shell windows and Start Menu surfaces
+- it stores recovery state while windows are managed
+- it can restore managed windows on normal exit
+- it ignores stale window handles after a restart
 
-Restoring a window writes the exact original extended style back and refreshes
-the frame. If the target window has already closed, ShelfyGAI removes the stale
-entry safely and continues.
+If something looks wrong, open ShelfyGAI and use Restore all.
 
-Pinning uses `SetWindowPos(hwnd, HWND_TOPMOST, ...)` to keep selected windows
-above normal windows. Unpinning restores the original topmost state. Optional
-prevent-minimize mode removes `WS_MINIMIZEBOX` while pinned and can run a
-lightweight watcher that restores pinned windows if they are minimized.
+## Limitations
 
-### Privacy
+- Tray icon hiding is limited and may not be supported for third-party apps.
+- Some apps recreate windows and may reappear in the taskbar or Alt+Tab.
+- Admin or elevated windows may require running ShelfyGAI as administrator.
+- Native Windows taskbar folders are not implemented because they require unsafe
+  shell-level modifications.
+- ShelfyGAI group taskbar windows are safe app-owned windows, not native Windows
+  taskbar folders.
+- Some apps use custom window frameworks and may not respond to standard Windows
+  style changes.
+- Window handles are valid only for the current Windows session.
+- Alpha builds may be unsigned, so Windows SmartScreen may show a warning.
+
+## Privacy
 
 ShelfyGAI stores data locally:
 
-- Settings: `%APPDATA%\ShelfyGAI\settings.json`
-- Logs: `%APPDATA%\ShelfyGAI\logs\`
-- Emergency recovery: `%APPDATA%\ShelfyGAI\recovery.json`
+- settings: `%APPDATA%\ShelfyGAI\settings.json`
+- logs: `%APPDATA%\ShelfyGAI\logs\`
+- recovery state: `%APPDATA%\ShelfyGAI\recovery.json`
 
-The app does not collect analytics, does not transmit usage data, does not sync
-window information to a server, and does not include cloud features. See
+The app does not collect analytics, sync data, or require an account. See
 [docs/PRIVACY.md](docs/PRIVACY.md).
 
-### Safety
+## Roadmap
 
-ShelfyGAI is designed to keep the desktop recoverable:
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the current public alpha roadmap.
 
-- It refuses to manage its own windows.
-- It refuses Windows taskbar shell windows.
-- It refuses Start Menu surfaces.
-- It refuses critical system windows.
-- It warns when a target appears to require administrator elevation from a
-  non-elevated ShelfyGAI process.
-- It warns when an application may not support taskbar style changes.
-- It restores managed windows on normal exit by default.
-- It restores pinned window styles on normal exit by default.
-- It writes local emergency recovery state and presents a recovery screen on the
-  next startup when needed.
-
-The Safety page in the app explains what ShelfyGAI can do, what it cannot do,
-why some windows cannot be managed, and how to restore windows safely.
-
-### Known Limitations
-
-- Window handles are only meaningful during the current Windows boot.
-- Some applications use custom window frameworks that may not behave like
-  standard taskbar applications.
-- Windows permission boundaries can prevent a non-elevated ShelfyGAI process
-  from managing elevated applications.
-- Some applications may ignore always-on-top or minimize-box style changes.
-- Global hotkeys can conflict with shortcuts already registered by other apps.
-- Installer artifacts are not signed yet.
-- The update check is currently an offline-safe placeholder.
-
-### Roadmap
-
-- Signed release artifacts.
-- Polished screenshots and release assets.
-- More group management refinements.
-- Optional richer restore history.
-- Future GitHub Releases update checks with explicit user action.
-- Broader manual testing across Windows 10 and Windows 11 configurations.
-
-### Contributing
+## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before
 opening a pull request.
 
 Project expectations:
 
-- Keep ShelfyGAI local-first.
-- Do not add telemetry, advertising, cloud sync, or surprise background services.
-- Keep Windows-specific behavior isolated behind platform adapters.
-- Add focused tests for settings, shelf behavior, recovery, and Windows API
-  safety logic.
-- Treat restore and recovery behavior as high-risk code.
+- keep ShelfyGAI simple and local-first
+- keep window restore and recovery behavior safe
+- avoid surprise background behavior
+- keep Windows-specific code isolated behind platform adapters
+- add tests for settings, shelf behavior, pinning, recovery, and guardrails
 
-### License
+## License
 
 ShelfyGAI is released under the MIT License. See [LICENSE](LICENSE).
 
-## Русский
+---
 
-### Описание проекта
+# ShelfyGAI на русском
 
-ShelfyGAI - это утилита с открытым исходным кодом для продуктивной работы и
-организации панели задач Windows. Она помогает перемещать выбранные окна
-приложений в локальную полку, чтобы панель задач и Alt+Tab оставались аккуратнее,
-а сами приложения продолжали работать. В любой момент можно вернуть отдельное
-окно, последнее окно из полки или все управляемые окна сразу.
+ShelfyGAI - простая open-source утилита для организации окон в Windows. Она
+помогает переносить выбранные окна на Полку, закреплять важные окна поверх
+остальных и очищать панель задач, не закрывая приложения.
 
-ShelfyGAI работает локально: без телеметрии, рекламы, облачной синхронизации и
-фоновой службы без явного действия пользователя.
+ShelfyGAI работает локально: настройки и журналы остаются на вашем компьютере.
+В приложении нет телеметрии, рекламы, аккаунтов, облачной синхронизации и
+фоновой службы без действия пользователя.
 
-Поддерживаемые платформы:
+## Скриншоты
 
-- Windows 10
-- Windows 11
+Скриншоты нужно обновлять перед каждым публичным релизом. Пути ниже
+зарезервированы для релизных материалов. Текущий интерфейс разделен на
+Открытые окна, Полку, Закрепленные, Группы, Настройки и О программе.
 
-### Возможности
+**Главное окно - открытые окна**
 
-- Перемещение выбранных окон из панели задач Windows и Alt+Tab в локальную
-  полку.
-- Восстановление выбранных окон, последнего окна из полки или всех управляемых
-  окон.
-- Закрепление выбранных окон поверх остальных с дополнительной защитой от
-  случайного сворачивания.
-- Группы и папки для управляемых окон, включая группу Без группы.
-- Поиск по открытым и управляемым окнам.
-- Значки приложений из исполняемых файлов с безопасной заменой при ошибках.
-- Современный темный интерфейс PySide6 с боковой навигацией.
-- Настройки темы, языка, акцентного цвета, автозапуска, трея, горячих клавиш и
-  безопасности.
-- Переключение языка между English и Русский.
-- Действия в системном трее: открыть ShelfyGAI, восстановить все окна,
-  настройки и выход.
-- Настраиваемые глобальные горячие клавиши через Windows `RegisterHotKey`.
-- Автозапуск для текущего пользователя через ключ HKCU Run.
-- Локальные настройки, журналы и файл восстановления в `%APPDATA%\ShelfyGAI`.
-- Аварийное восстановление при следующем запуске, если предыдущий сеанс
-  завершился с управляемыми окнами.
+![Главное окно - открытые окна](docs/assets/screenshots/01-main-open-windows.png)
 
-### Скриншоты
+**Полка**
 
-Скриншоты будут добавлены после стабилизации публичных preview-сборок.
+![Полка](docs/assets/screenshots/02-shelf.png)
 
-| Экран | Заглушка |
-| --- | --- |
-| Главное окно | `docs/assets/screenshots/main-window.png` |
-| Настройки | `docs/assets/screenshots/settings.png` |
-| Управляемые окна | `docs/assets/screenshots/managed-windows.png` |
-| Меню трея | `docs/assets/screenshots/tray-menu.png` |
-| Переключение языка | `docs/assets/screenshots/language-switch.png` |
+**Закрепленные окна**
 
-### Установка
+![Закрепленные окна](docs/assets/screenshots/03-pinned.png)
 
-После публикации релизов используйте установщик со страницы Releases проекта.
-Установщик:
+**Группы**
 
-- Устанавливает ShelfyGAI в Program Files или пользовательский каталог.
-- Создает ярлык в меню Пуск.
-- Предлагает необязательный ярлык на рабочем столе.
-- Поддерживает обычное удаление через Windows.
-- Не включает автозапуск по умолчанию.
-- Сохраняет `%APPDATA%\ShelfyGAI` при обновлениях и повторной установке.
+![Группы](docs/assets/screenshots/04-groups.png)
 
-Также можно использовать onedir-сборку PyInstaller:
+**Окно группы на панели задач**
+
+![Окно группы на панели задач](docs/assets/screenshots/05-taskbar-group-window.png)
+
+**Настройки**
+
+![Настройки](docs/assets/screenshots/06-settings.png)
+
+**Меню трея**
+
+![Меню трея](docs/assets/screenshots/07-tray-menu.png)
+
+**Переключение языка EN/RU**
+
+![Переключение языка EN/RU](docs/assets/screenshots/08-language-switch.png)
+
+**Установщик**
+
+![Установщик](docs/assets/screenshots/09-installer.png)
+
+План скриншотов находится в
+[docs/assets/screenshots/README.md](docs/assets/screenshots/README.md).
+
+## Возможности
+
+- Перемещение выбранных окон на Полку.
+- Скрытие окон на Полке с панели задач Windows.
+- Скрытие окон на Полке из Alt+Tab, если целевое окно это поддерживает.
+- Безопасный возврат одного окна, последнего окна или всех окон сразу.
+- Закрепление окон поверх остальных.
+- Создание групп для окон на Полке.
+- Необязательное окно группы ShelfyGAI как один элемент панели задач Windows.
+- Интерфейс на английском и русском языках.
+- Локальные настройки в `%APPDATA%\ShelfyGAI`.
+- Локальные журналы в `%APPDATA%\ShelfyGAI\logs`.
+
+## Установка
+
+Для обычных пользователей рекомендуемый public alpha файл - один офлайн
+установщик:
 
 ```text
-dist\ShelfyGAI\ShelfyGAI.exe
+ShelfyGAI-Setup-v0.1.0.exe
 ```
 
-### Запуск из исходного кода
+Скачайте его со страницы GitHub Releases, запустите и откройте ShelfyGAI из
+меню Пуск. Python, pip, Git и исходный код не нужны.
+
+Установщик:
+
+- создает ярлык в меню Пуск
+- создает ярлык на рабочем столе по умолчанию
+- добавляет обычное удаление через Windows
+- не включает автозапуск по умолчанию
+- хранит пользовательские настройки в `%APPDATA%\ShelfyGAI`
+
+Короткая инструкция: [docs/INSTALL_FOR_USERS.md](docs/INSTALL_FOR_USERS.md).
+
+## Запуск из исходников
+
+Требования:
+
+- Windows 10 или Windows 11
+- Python 3.11 или новее
 
 ```powershell
 py -3.11 -m venv .venv
@@ -370,7 +335,7 @@ python -m pip install -e .
 python -m shelfygai
 ```
 
-Для разработки:
+Проверки для разработки:
 
 ```powershell
 python -m pip install -e ".[dev]"
@@ -378,39 +343,22 @@ python -m ruff check .
 python -m pytest
 ```
 
-### Сборка исполняемого файла
+## Сборка
 
-PyInstaller создает onedir-сборку для Windows:
+Сборка standalone-папки приложения:
 
 ```powershell
 python -m pip install -e ".[build]"
 .\scripts\build_exe.ps1 -Clean
 ```
 
-Результат:
+Ожидаемый результат:
 
 ```text
 dist\ShelfyGAI\ShelfyGAI.exe
 ```
 
-Проверка packaged-сборки:
-
-```powershell
-.\scripts\build_exe.ps1 -Clean -SmokeTest
-```
-
-Эта проверка запускает собранное приложение и проверяет загрузку переводов,
-ресурсов, запись настроек и запись журналов.
-
-### Сборка установщика
-
-Установите Inno Setup 6 и выполните:
-
-```powershell
-.\scripts\build_installer.ps1
-```
-
-Если исполняемый файл уже собран:
+Сборка Windows-установщика через Inno Setup:
 
 ```powershell
 .\scripts\build_installer.ps1 -SkipExeBuild
@@ -419,129 +367,91 @@ dist\ShelfyGAI\ShelfyGAI.exe
 Ожидаемый результат:
 
 ```text
-dist\installer\ShelfyGAI-Setup-0.1.0.exe
+dist\installer\ShelfyGAI-Setup-v0.1.0.exe
 ```
 
-Подробнее: [docs/PACKAGING.md](docs/PACKAGING.md) и
-[installer/README_INSTALLER.md](installer/README_INSTALLER.md).
+Документация для мейнтейнеров:
+[docs/BUILD_RELEASE.md](docs/BUILD_RELEASE.md),
+[docs/BUILD.md](docs/BUILD.md) и [docs/INSTALLER.md](docs/INSTALLER.md).
 
-Для самого простого публичного сценария сопровождающие также могут опубликовать
-маленький web-installer в один файл:
+## Как это работает
 
-```powershell
-.\scripts\build_web_installer.ps1 `
-  -DownloadUrl "https://github.com/shelfygai/shelfygai/releases/download/v0.1.0/ShelfyGAI-Setup-0.1.0.exe" `
-  -DownloadSha256 "<64-character-sha256>"
-```
+ShelfyGAI находит обычные верхнеуровневые окна приложений Windows и позволяет
+пользователю выбрать действие для конкретного окна.
 
-Результат:
+Когда окно переносится на Полку, ShelfyGAI сохраняет исходный стиль окна и
+применяет обратимые изменения расширенных стилей Windows. Приложение может
+убрать `WS_EX_APPWINDOW` для панели задач и добавить `WS_EX_TOOLWINDOW` для
+Alt+Tab. При возврате ShelfyGAI записывает исходный стиль обратно.
 
-```text
-dist\installer\ShelfyGAI-WebSetup-0.1.0.exe
-```
+Закрепление использует `SetWindowPos(hwnd, HWND_TOPMOST, ...)`. Открепление
+использует `HWND_NOTOPMOST`, а при выходе ShelfyGAI по умолчанию очищает
+закрепленные окна.
 
-Он скачивает полный офлайн-инсталлятор из GitHub Releases и запускает его.
-Офлайн-инсталлятор остается доступным для пользователей, которым нужна установка
-без сети.
+Группы управляются внутри ShelfyGAI. Необязательные окна групп на панели задач -
+это обычные окна, принадлежащие ShelfyGAI. Они безопасно представляют группу и
+не изменяют оболочку Windows.
 
-### Как это работает технически
+## Безопасность
 
-ShelfyGAI использует Windows API для перечисления верхнеуровневых окон и
-обратимого изменения расширенных стилей окна. Когда окно перемещается в полку,
-ShelfyGAI:
+ShelfyGAI спроектирован так, чтобы окна можно было вернуть:
 
-1. Перечисляет верхнеуровневые окна через WinAPI.
-2. Исключает окна без заголовка, поверхности системной оболочки, меню Пуск,
-   защищенные системные окна, собственные окна ShelfyGAI и другие небезопасные
-   цели.
-3. Читает исходный расширенный стиль через `GetWindowLong`.
-4. Сохраняет исходный стиль в памяти и во временном локальном состоянии
-   восстановления.
-5. Убирает `WS_EX_APPWINDOW`.
-6. Добавляет `WS_EX_TOOLWINDOW`.
-7. Вызывает `SetWindowLong` и `SetWindowPos` с `SWP_FRAMECHANGED`.
+- приложение не закрывает целевые программы при переносе окон на Полку
+- оно не управляет собственными окнами
+- оно избегает окон панели задач Windows и поверхностей меню Пуск
+- оно хранит состояние восстановления, пока окна находятся в управлении
+- оно может вернуть управляемые окна при штатном выходе
+- оно игнорирует устаревшие дескрипторы окон после перезапуска Windows
 
-При восстановлении ShelfyGAI записывает точный исходный расширенный стиль
-обратно и обновляет рамку окна. Если окно уже закрыто, устаревшая запись
-безопасно удаляется.
+Если что-то выглядит неправильно, откройте ShelfyGAI и используйте Вернуть все.
 
-Закрепление использует `SetWindowPos(hwnd, HWND_TOPMOST, ...)`, чтобы выбранные
-окна оставались поверх обычных окон. При откреплении восстанавливается исходное
-состояние поверх остальных. Дополнительный режим запрета сворачивания временно
-убирает `WS_MINIMIZEBOX`, а легкий наблюдатель может восстановить закрепленное
-окно, если оно было свернуто.
+## Ограничения
 
-### Приватность
+- Скрытие значков трея ограничено и может не поддерживаться для сторонних
+  приложений.
+- Некоторые приложения пересоздают окна, поэтому они могут снова появиться на
+  панели задач или в Alt+Tab.
+- Для окон с правами администратора может потребоваться запуск ShelfyGAI от
+  имени администратора.
+- Нативные папки панели задач Windows не реализованы, потому что требуют
+  небезопасных изменений на уровне оболочки.
+- Окна групп ShelfyGAI на панели задач - это безопасные окна самого приложения,
+  а не нативные папки панели задач Windows.
+- Некоторые приложения используют нестандартные оконные фреймворки и могут не
+  реагировать на стандартные изменения стилей Windows.
+- Дескрипторы окон действительны только в текущем сеансе Windows.
+- Alpha-сборки могут быть неподписанными, поэтому Windows SmartScreen может
+  показать предупреждение.
+
+## Приватность
 
 ShelfyGAI хранит данные локально:
 
-- Настройки: `%APPDATA%\ShelfyGAI\settings.json`
-- Журналы: `%APPDATA%\ShelfyGAI\logs\`
-- Аварийное восстановление: `%APPDATA%\ShelfyGAI\recovery.json`
+- настройки: `%APPDATA%\ShelfyGAI\settings.json`
+- журналы: `%APPDATA%\ShelfyGAI\logs\`
+- состояние восстановления: `%APPDATA%\ShelfyGAI\recovery.json`
 
-Приложение не собирает аналитику, не отправляет данные об использовании, не
-синхронизирует сведения об окнах с сервером и не содержит облачных функций.
+Приложение не собирает аналитику, не синхронизирует данные и не требует аккаунт.
 Подробнее: [docs/PRIVACY.md](docs/PRIVACY.md).
 
-### Безопасность
+## Планы
 
-ShelfyGAI спроектирован так, чтобы рабочий стол оставался восстановимым:
+Текущая дорожная карта public alpha находится в
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
-- Не управляет собственными окнами.
-- Не управляет окнами панели задач и системной оболочки Windows.
-- Не управляет поверхностями меню Пуск.
-- Не управляет критическими системными окнами.
-- Предупреждает, если цель требует прав администратора, а ShelfyGAI запущен без
-  повышения прав.
-- Предупреждает, если приложение может не поддерживать изменение стилей панели
-  задач.
-- По умолчанию восстанавливает управляемые окна при штатном выходе.
-- По умолчанию восстанавливает стили закрепленных окон при штатном выходе.
-- Сохраняет локальное состояние аварийного восстановления и показывает экран
-  восстановления при следующем запуске, если это необходимо.
-
-Страница Безопасность в приложении объясняет, что ShelfyGAI может делать, чего
-не делает, почему некоторые окна нельзя взять в управление и как безопасно
-вернуть окна обратно.
-
-### Известные ограничения
-
-- Дескрипторы окон имеют смысл только в рамках текущей загрузки Windows.
-- Некоторые приложения используют нестандартные оконные фреймворки и могут
-  отличаться от обычных приложений панели задач.
-- Ограничения прав Windows могут мешать управлять приложениями с повышенными
-  правами из обычного процесса ShelfyGAI.
-- Некоторые приложения могут игнорировать режим поверх остальных окон или
-  изменение кнопки сворачивания.
-- Глобальные горячие клавиши могут конфликтовать с сочетаниями, уже занятыми
-  другими приложениями.
-- Релизные артефакты пока не подписаны.
-- Проверка обновлений пока является локальной заготовкой.
-
-### Дорожная карта
-
-- Подписанные релизные артефакты.
-- Скриншоты и материалы для релизов.
-- Улучшения управления группами.
-- Дополнительная история восстановления.
-- Будущая проверка GitHub Releases только по явному действию пользователя.
-- Расширенное ручное тестирование на Windows 10 и Windows 11.
-
-### Участие в разработке
+## Участие в разработке
 
 Вклады приветствуются. Перед pull request прочитайте
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Ожидания проекта:
 
-- Сохранять локальный подход.
-- Не добавлять телеметрию, рекламу, облачную синхронизацию или неожиданные
-  фоновые службы.
-- Изолировать Windows-специфичное поведение за платформенными адаптерами.
-- Добавлять целевые тесты для настроек, полки, восстановления и безопасной
-  работы с Windows API.
-- Считать код восстановления окон зоной повышенного внимания.
+- сохранять ShelfyGAI простым и локальным
+- бережно относиться к восстановлению окон
+- избегать неожиданного фонового поведения
+- изолировать Windows-specific код за платформенными адаптерами
+- добавлять тесты для настроек, Полки, закрепления, восстановления и guardrails
 
-### Лицензия
+## Лицензия
 
 ShelfyGAI распространяется по лицензии MIT. См. [LICENSE](LICENSE).
