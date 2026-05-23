@@ -33,10 +33,9 @@
 
 ## Overview
 
-ShelfyGAI helps you move selected application windows into a local Shelf, pin
-important windows above others, and restore everything safely when you need it
-again. It is designed as a productivity utility, not a background monitoring
-tool.
+ShelfyGAI helps you hide selected application windows, pin important windows
+above others, and restore everything safely when you need it again. It is
+designed as a productivity utility, not a background monitoring tool.
 
 ShelfyGAI is local-first:
 
@@ -58,10 +57,10 @@ shortcut by default.
 
 ## Features
 
-- Move selected windows to the Shelf.
-- Hide shelved windows from the Windows taskbar.
-- Hide shelved windows from Alt+Tab when supported by the target window.
-- Restore one window, the latest shelved window, or everything safely.
+- Hide selected windows.
+- Hide windows from the Windows taskbar.
+- Hide windows from Alt+Tab when supported by the target window.
+- Restore one window, the latest hidden window, or everything safely.
 - Pin windows above other windows.
 - Create groups for organized window workflows.
 - Optionally show a ShelfyGAI-owned group window as one taskbar item.
@@ -154,10 +153,23 @@ More build notes:
 ShelfyGAI enumerates normal top-level Windows application windows and lets the
 user choose what to do with a selected window.
 
-When a window is moved to the Shelf, ShelfyGAI stores the original window style
-and applies reversible Windows extended-style changes. It can remove
-`WS_EX_APPWINDOW` for taskbar visibility and add `WS_EX_TOOLWINDOW` for Alt+Tab
-visibility. On restore, ShelfyGAI writes the original style back.
+When a window is hidden, ShelfyGAI stores the original extended window style
+before changing anything. Hide options are applied with reversible Windows style
+updates and `SetWindowPos(..., SWP_FRAMECHANGED)`. On restore, ShelfyGAI writes
+the exact original style back.
+
+The two reliable cases are documented clearly:
+
+- hiding from both taskbar and Alt+Tab removes `WS_EX_APPWINDOW` and adds
+  `WS_EX_TOOLWINDOW`
+- hiding from taskbar only avoids `WS_EX_TOOLWINDOW`, so the window should stay
+  visible in Alt+Tab, but some apps may remain on the taskbar
+
+Alt+Tab-only hiding is best effort because Windows does not expose a fully
+reliable style for every app that removes only Alt+Tab while preserving taskbar
+behavior. Tray icon hiding is stored as a preference only; ShelfyGAI does not use
+unsafe shell injection, Explorer restarts, or registry hacks to remove third-party
+notification area icons.
 
 Pinning uses `SetWindowPos(hwnd, HWND_TOPMOST, ...)`. Unpinning uses
 `HWND_NOTOPMOST`, and ShelfyGAI unpins currently pinned windows on exit by
@@ -170,18 +182,21 @@ a safe group representation without modifying Explorer or the Windows shell.
 
 ShelfyGAI is designed to keep windows recoverable:
 
-- it does not close target apps when moving windows to the Shelf
+- it does not close target apps when hiding windows
 - it avoids managing its own windows
 - it avoids Windows taskbar shell windows and Start Menu surfaces
-- it stores recovery state while windows are managed
-- it can restore managed windows on normal exit
+- it stores recovery state while windows are hidden
+- it can restore hidden windows on normal exit
 - it ignores stale window handles after restart
 
 If something looks wrong, open ShelfyGAI and use **Restore all**.
 
 ## Limitations
 
-- Tray icon hiding is limited and may not work for third-party apps.
+- Tray icon hiding is limited and may not work for third-party apps. In the alpha,
+  ShelfyGAI does not perform unsafe tray icon removal.
+- Taskbar-only and Alt+Tab-only hiding are constrained by Windows shell behavior.
+  If a combination cannot be guaranteed, ShelfyGAI warns before applying it.
 - Some apps recreate windows and may reappear in the taskbar or Alt+Tab.
 - Admin or elevated windows may require running ShelfyGAI as administrator.
 - Native Windows taskbar folders are not implemented because they require unsafe
@@ -218,7 +233,7 @@ Project expectations:
 - keep restore and recovery behavior safe
 - avoid surprise background behavior
 - keep Windows-specific code isolated behind platform adapters
-- add tests for settings, shelf behavior, pinning, recovery, and guardrails
+- add tests for settings, hidden-window behavior, pinning, recovery, and guardrails
 
 ## License
 

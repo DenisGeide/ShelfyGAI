@@ -6,7 +6,7 @@ from.
 
 ## v0.1.0 Public Alpha
 
-- Move windows to Shelf.
+- Hide windows.
 - Restore windows.
 - Pin and unpin windows.
 - Groups.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Sequence
+from dataclasses import asdict
 from time import perf_counter
 
 from PySide6.QtCore import (
@@ -18,6 +19,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
+    QColor,
     QDesktopServices,
     QIcon,
     QKeySequence,
@@ -28,8 +30,10 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFrame,
     QGraphicsOpacityEffect,
     QGridLayout,
@@ -39,6 +43,8 @@ from PySide6.QtWidgets import (
     QKeySequenceEdit,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -58,7 +64,16 @@ from PySide6.QtWidgets import (
 
 from shelfygai.constants import APP_NAME, APP_VERSION, GITHUB_REPOSITORY_URL, resource_path
 from shelfygai.core.errors import ShelfyGAIError
-from shelfygai.core.models import DEFAULT_GROUP_ID, PinnedItem, ShelfItem, WindowGroup, WindowInfo
+from shelfygai.core.models import (
+    DEFAULT_GROUP_ID,
+    HideOptions,
+    OverlayGroup,
+    PinnedItem,
+    ShelfItem,
+    WindowGroup,
+    WindowInfo,
+)
+from shelfygai.core.overlay_groups import OverlayGroupService
 from shelfygai.core.shelf import ShelfService
 from shelfygai.crash import EmergencyRecoveryStore
 from shelfygai.i18n import SUPPORTED_LANGUAGES, set_language, tr
@@ -74,8 +89,16 @@ from shelfygai.settings.settings_manager import (
     current_boot_id,
 )
 from shelfygai.ui.components import GroupButton
+from shelfygai.ui.hide_messages import hide_confirmation_message, hide_limitation_message
 from shelfygai.ui.icons import AppIconProvider
 from shelfygai.ui.onboarding_dialog import ACCENT_COLORS, SettingsDialog
+from shelfygai.ui.overlay_markers import OverlayMarkerManager, OverlayPopupItem
+from shelfygai.ui.pinned_order import (
+    bring_handle_to_front,
+    move_handle,
+    ordered_pinned_handles,
+    ordered_pinned_items,
+)
 from shelfygai.ui.theme import apply_theme
 from shelfygai.updates.service import UpdateService
 
@@ -94,6 +117,8 @@ HOTKEY_ACTION_DESCRIPTION_KEYS = {
     HOTKEY_RESTORE_LAST: "hotkey.desc.restore_last",
     HOTKEY_TOGGLE_VISIBILITY: "hotkey.desc.toggle_visibility",
 }
+OPEN_WINDOWS_AUTO_REFRESH_INTERVAL_MS = 15_000
+SEARCH_FILTER_DEBOUNCE_MS = 180
 NAVIGATION_KEYS = (
     "label.open_windows",
     "label.shelf",
@@ -101,14 +126,6 @@ NAVIGATION_KEYS = (
     "label.groups",
     "label.settings",
     "label.about",
-)
-NAVIGATION_ICONS = (
-    QStyle.StandardPixmap.SP_ComputerIcon,
-    QStyle.StandardPixmap.SP_DirIcon,
-    QStyle.StandardPixmap.SP_ArrowUp,
-    QStyle.StandardPixmap.SP_DirHomeIcon,
-    QStyle.StandardPixmap.SP_FileDialogDetailedView,
-    QStyle.StandardPixmap.SP_MessageBoxInformation,
 )
 PAGE_COPY_KEYS = {
     0: ("label.open_windows", "page.open_windows.subtitle"),
@@ -159,9 +176,58 @@ class MainWindow(QMainWindow):
         self._groups_layout = QVBoxLayout(self._groups_container)
         self._groups_layout.setContentsMargins(0, 0, 0, 0)
         self._groups_layout.setSpacing(8)
+        self._overlay_group_service = OverlayGroupService(
+            _overlay_groups_from_settings(self._settings.overlay_groups)
+        )
+        self._selected_overlay_group_id = self._valid_overlay_group_id(
+            self._settings.selected_overlay_group_id
+        )
+        self._overlay_controls_syncing = False
+        self._overlay_enabled_checkbox = QCheckBox()
+        self._overlay_groups_list = QListWidget()
+        self._overlay_name_edit = QLineEdit()
+        self._overlay_color_button = QPushButton()
+        self._overlay_marker_width_spin = QSpinBox()
+        self._overlay_marker_height_spin = QSpinBox()
+        self._overlay_opacity_spin = QDoubleSpinBox()
+        self._overlay_corner_radius_spin = QSpinBox()
+        self._overlay_hover_delay_spin = QSpinBox()
+        self._overlay_locked_position_checkbox = QCheckBox()
+        self._overlay_hide_fullscreen_checkbox = QCheckBox()
+        self._overlay_quick_controls_checkbox = QCheckBox()
+        self._overlay_reset_position_button = QPushButton()
+        self._overlay_delete_button = QPushButton()
+        self._overlay_empty_label = QLabel()
+        self._overlay_marker_manager = OverlayMarkerManager(
+            self._overlay_popup_items,
+            parent=self,
+        )
+        self._overlay_marker_manager.positionSaved.connect(self._save_overlay_marker_position)
+        self._overlay_marker_manager.settingsRequested.connect(
+            self._show_overlay_group_settings
+        )
+        self._overlay_marker_manager.colorChangeRequested.connect(
+            self._choose_overlay_color_for_group
+        )
+        self._overlay_marker_manager.lockChanged.connect(self._set_overlay_group_locked)
+        self._overlay_marker_manager.windowOpenRequested.connect(self._open_overlay_window)
+        self._overlay_marker_manager.windowRestoreRequested.connect(
+            self._restore_overlay_window
+        )
+        self._overlay_marker_manager.windowRemoveRequested.connect(
+            self._remove_overlay_window_from_group
+        )
+        self._overlay_marker_manager.restoreAllRequested.connect(
+            self._restore_overlay_group_windows
+        )
+        self._overlay_marker_manager.hideAllRequested.connect(
+            self._hide_overlay_group_windows
+        )
+        self._overlay_marker_manager.openShelfyRequested.connect(self._open_from_overlay_popup)
         self._open_windows_search = QLineEdit()
         self._open_windows_auto_refresh_checkbox = QCheckBox()
         self._open_windows_refresh_timer = QTimer(self)
+        self._open_windows_filter_timer = QTimer(self)
         self._pinned_watcher_timer = QTimer(self)
         self._header_title = QLabel()
         self._header_subtitle = QLabel()
@@ -175,6 +241,8 @@ class MainWindow(QMainWindow):
         self._selected_window_title = QLabel()
         self._selected_window_state = QLabel()
         self._selected_window_hint = QLabel()
+        self._selected_hide_button: QPushButton | None = None
+        self._selected_overlay_group_button: QPushButton | None = None
         self._hide_taskbar_checkbox = QCheckBox()
         self._hide_alt_tab_checkbox = QCheckBox()
         self._hide_tray_checkbox = QCheckBox()
@@ -222,16 +290,20 @@ class MainWindow(QMainWindow):
         self._last_pinned_items: tuple[PinnedItem, ...] = ()
         self._pinned_order: list[int] = []
 
-        self._open_windows_refresh_timer.setInterval(5_000)
+        self._open_windows_refresh_timer.setInterval(OPEN_WINDOWS_AUTO_REFRESH_INTERVAL_MS)
         self._open_windows_refresh_timer.setTimerType(Qt.TimerType.VeryCoarseTimer)
         self._open_windows_refresh_timer.timeout.connect(lambda: self._refresh(reason="auto"))
+        self._open_windows_filter_timer.setSingleShot(True)
+        self._open_windows_filter_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._open_windows_filter_timer.setInterval(SEARCH_FILTER_DEBOUNCE_MS)
+        self._open_windows_filter_timer.timeout.connect(self._apply_open_windows_filter)
         self._pinned_watcher_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._pinned_watcher_timer.timeout.connect(self._check_pinned_windows)
         self._configure_table_context_menus()
         self._bind_text(self._open_windows_search, "placeholder.open_search", "setPlaceholderText")
         self._bind_text(self._open_windows_search, "placeholder.open_search", "setAccessibleName")
         self._open_windows_search.setClearButtonEnabled(True)
-        self._open_windows_search.textChanged.connect(self._apply_open_windows_filter)
+        self._open_windows_search.textChanged.connect(self._schedule_open_windows_filter)
         self._available_table.itemSelectionChanged.connect(self._update_selected_window_card)
         self._loading_label.setObjectName("LoadingPill")
         self._loading_label.setVisible(False)
@@ -256,6 +328,57 @@ class MainWindow(QMainWindow):
         self._group_empty_label.setWordWrap(True)
         self._group_empty_label.setMinimumHeight(76)
         self._group_empty_label.setVisible(False)
+        self._overlay_empty_label.setObjectName("EmptyState")
+        self._overlay_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._overlay_empty_label.setWordWrap(True)
+        self._overlay_empty_label.setMinimumHeight(76)
+        self._overlay_groups_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._overlay_groups_list.setAlternatingRowColors(False)
+        self._overlay_groups_list.currentItemChanged.connect(
+            self._select_overlay_group_from_list
+        )
+        self._overlay_name_edit.editingFinished.connect(self._update_overlay_name)
+        self._overlay_marker_width_spin.setRange(4, 64)
+        self._overlay_marker_width_spin.setSuffix(" px")
+        self._overlay_marker_height_spin.setRange(24, 256)
+        self._overlay_marker_height_spin.setSuffix(" px")
+        self._overlay_opacity_spin.setRange(0.2, 1.0)
+        self._overlay_opacity_spin.setSingleStep(0.05)
+        self._overlay_opacity_spin.setDecimals(2)
+        self._overlay_corner_radius_spin.setRange(0, 32)
+        self._overlay_corner_radius_spin.setSuffix(" px")
+        self._overlay_hover_delay_spin.setRange(0, 5_000)
+        self._overlay_hover_delay_spin.setSingleStep(100)
+        self._overlay_hover_delay_spin.setSuffix(" ms")
+        self._overlay_enabled_checkbox.setChecked(self._settings.overlay_groups_enabled)
+        self._overlay_enabled_checkbox.toggled.connect(self._set_overlay_groups_enabled)
+        self._overlay_marker_width_spin.valueChanged.connect(
+            lambda _value: self._update_overlay_numeric_settings()
+        )
+        self._overlay_marker_height_spin.valueChanged.connect(
+            lambda _value: self._update_overlay_numeric_settings()
+        )
+        self._overlay_opacity_spin.valueChanged.connect(
+            lambda _value: self._update_overlay_numeric_settings()
+        )
+        self._overlay_corner_radius_spin.valueChanged.connect(
+            lambda _value: self._update_overlay_numeric_settings()
+        )
+        self._overlay_hover_delay_spin.valueChanged.connect(
+            lambda _value: self._update_overlay_numeric_settings()
+        )
+        self._overlay_locked_position_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_boolean_settings()
+        )
+        self._overlay_hide_fullscreen_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_boolean_settings()
+        )
+        self._overlay_quick_controls_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_boolean_settings()
+        )
+        self._overlay_color_button.clicked.connect(self._choose_overlay_color)
+        self._overlay_reset_position_button.clicked.connect(self._reset_overlay_marker_position)
+        self._overlay_delete_button.clicked.connect(self._delete_selected_overlay_group)
         self._selected_window_icon.setObjectName("IconBadge")
         self._selected_window_icon.setFixedSize(42, 42)
         self._selected_window_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -280,6 +403,7 @@ class MainWindow(QMainWindow):
         self._bind_text(self._open_windows_auto_refresh_checkbox, "label.auto_refresh")
         self._bind_text(self._restore_on_exit_checkbox, "label.restore_on_exit")
         self._bind_text(self._restore_pinned_on_exit_checkbox, "label.restore_pinned_on_exit")
+        self._restore_pinned_on_exit_checkbox.setEnabled(False)
         self._bind_text(self._focus_restored_checkbox, "label.focus_restored_windows")
         self._bind_text(self._confirm_checkbox, "label.confirm_before_hiding")
         self._bind_text(self._confirm_quit_checkbox, "label.confirm_quit_with_hidden_windows")
@@ -299,6 +423,52 @@ class MainWindow(QMainWindow):
         self._bind_text(self._debug_mode_checkbox, "label.debug_logging")
         self._bind_text(self._hotkey_status_label, "hotkey.default_status")
         self._bind_text(self._update_status_label, "about.update.default")
+        self._bind_text(self._overlay_enabled_checkbox, "label.overlay_groups_enabled")
+        self._bind_text(self._overlay_color_button, "action.choose_color")
+        self._bind_text(
+            self._overlay_reset_position_button,
+            "action.reset_marker_position",
+        )
+        self._bind_text(self._overlay_delete_button, "action.delete_overlay_group")
+        self._bind_text(self._overlay_empty_label, "empty.overlay_groups")
+        self._bind_text(self._overlay_name_edit, "label.overlay_group_name", "setAccessibleName")
+        self._bind_text(
+            self._overlay_marker_width_spin,
+            "label.overlay_marker_width",
+            "setAccessibleName",
+        )
+        self._bind_text(
+            self._overlay_marker_height_spin,
+            "label.overlay_marker_height",
+            "setAccessibleName",
+        )
+        self._bind_text(
+            self._overlay_opacity_spin,
+            "label.overlay_opacity",
+            "setAccessibleName",
+        )
+        self._bind_text(
+            self._overlay_corner_radius_spin,
+            "label.overlay_corner_radius",
+            "setAccessibleName",
+        )
+        self._bind_text(
+            self._overlay_hover_delay_spin,
+            "label.overlay_hover_delay",
+            "setAccessibleName",
+        )
+        self._bind_text(
+            self._overlay_locked_position_checkbox,
+            "label.overlay_lock_position",
+        )
+        self._bind_text(
+            self._overlay_hide_fullscreen_checkbox,
+            "label.overlay_hide_fullscreen",
+        )
+        self._bind_text(
+            self._overlay_quick_controls_checkbox,
+            "label.overlay_show_quick_controls",
+        )
         self._open_windows_auto_refresh_checkbox.setChecked(
             self._settings.open_windows_auto_refresh
         )
@@ -335,6 +505,7 @@ class MainWindow(QMainWindow):
         self._configure_open_windows_auto_refresh(self._settings.open_windows_auto_refresh)
         self._configure_global_hotkeys()
         self._configure_pinned_watcher()
+        self._sync_overlay_markers()
         qt_app = QApplication.instance()
         if qt_app is not None:
             qt_app.aboutToQuit.connect(self._cleanup_global_hotkeys)
@@ -618,8 +789,7 @@ class MainWindow(QMainWindow):
             button = QPushButton()
             button.setObjectName("SidebarButton")
             button.setCheckable(True)
-            button.setIcon(self.style().standardIcon(NAVIGATION_ICONS[index]))
-            button.setIconSize(QSize(18, 18))
+            button.setFlat(True)
             self._bind_text(button, label_key)
             button.clicked.connect(lambda _checked=False, page=index: self._show_page(page))
             self._nav_buttons.append(button)
@@ -744,6 +914,12 @@ class MainWindow(QMainWindow):
             primary=True,
             icon=QStyle.StandardPixmap.SP_ArrowForward,
         )
+        self._selected_hide_button = move_button
+        overlay_group_button = self._make_button(
+            "action.add_to_overlay_group",
+            self._add_selected_to_overlay_group,
+        )
+        self._selected_overlay_group_button = overlay_group_button
         pin_button = self._make_button(
             "action.pin",
             self._pin_selected,
@@ -769,6 +945,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._selected_window_hint)
         layout.addWidget(actions_title)
         layout.addWidget(move_button)
+        layout.addWidget(overlay_group_button)
         layout.addWidget(pin_button)
         layout.addWidget(front_button)
         layout.addSpacing(6)
@@ -806,6 +983,18 @@ class MainWindow(QMainWindow):
                 icon=QStyle.StandardPixmap.SP_DialogResetButton,
             )
         )
+        action_row.addWidget(
+            self._make_button(
+                "action.move_to_overlay_group",
+                self._move_selected_hidden_to_overlay_group,
+            )
+        )
+        action_row.addWidget(
+            self._make_button(
+                "action.remove_from_overlay_group",
+                self._remove_selected_from_overlay_group,
+            )
+        )
         layout.addLayout(action_row)
         layout.addWidget(self._shelf_table, 1)
         layout.addWidget(self._shelf_empty_label)
@@ -829,8 +1018,7 @@ class MainWindow(QMainWindow):
         action_row.addWidget(
             self._make_button(
                 "action.bring_to_front",
-                lambda: self._bring_selected_forward(self._pinned_table),
-                icon=QStyle.StandardPixmap.SP_ArrowUp,
+                self._bring_pinned_selection_to_front,
             )
         )
         action_row.addWidget(
@@ -838,7 +1026,6 @@ class MainWindow(QMainWindow):
                 "action.unpin",
                 self._unpin_selected,
                 primary=True,
-                icon=QStyle.StandardPixmap.SP_DialogResetButton,
             )
         )
         layout.addLayout(action_row)
@@ -848,9 +1035,15 @@ class MainWindow(QMainWindow):
 
     def _build_groups_page(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
+        layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
+
+        description = QLabel()
+        description.setObjectName("Muted")
+        description.setWordWrap(True)
+        self._bind_text(description, "overlay.description")
+        layout.addWidget(description)
 
         group_panel = QFrame()
         group_panel.setObjectName("Panel")
@@ -862,70 +1055,107 @@ class MainWindow(QMainWindow):
 
         group_title = QLabel()
         group_title.setObjectName("PanelTitle")
-        self._bind_text(group_title, "label.groups")
-
-        group_actions = QVBoxLayout()
-        group_actions.setSpacing(8)
-        group_actions.addWidget(
-            self._make_button("action.new_group", self._create_group, primary=True)
-        )
-        group_actions.addWidget(self._make_button("action.rename", self._rename_selected_group))
-        group_actions.addWidget(self._make_button("action.delete", self._delete_selected_group))
+        self._bind_text(group_title, "label.overlay_groups_list")
 
         group_layout.addWidget(group_title)
-        group_layout.addLayout(group_actions)
-        group_layout.addWidget(self._groups_container, 1)
-
-        group_window_button = self._make_button(
-            "action.show_group_taskbar_window",
-            self._group_taskbar_placeholder,
-        )
-        group_window_button.setEnabled(False)
-        self._bind_text(
-            group_window_button,
-            "tooltip.group_taskbar_placeholder",
-            "setToolTip",
-        )
-        group_layout.addWidget(group_window_button)
-
-        windows_panel = QFrame()
-        windows_panel.setObjectName("Panel")
-        windows_layout = QVBoxLayout(windows_panel)
-        windows_layout.setContentsMargins(18, 18, 18, 18)
-        windows_layout.setSpacing(12)
-
-        windows_title = QLabel()
-        windows_title.setObjectName("PanelTitle")
-        self._bind_text(windows_title, "label.group_windows")
-
-        window_actions = QHBoxLayout()
-        window_actions.setSpacing(10)
-        window_actions.addStretch(1)
-        window_actions.addWidget(
+        group_layout.addWidget(self._overlay_enabled_checkbox)
+        group_layout.addWidget(
             self._make_button(
-                "action.restore",
-                lambda: self._restore_selected(self._group_table),
+                "action.create_overlay_group",
+                self._create_overlay_group,
                 primary=True,
-                icon=QStyle.StandardPixmap.SP_ArrowBack,
             )
         )
-        window_actions.addWidget(
-            self._make_button(
-                "action.restore_all",
-                self._restore_selected_group_windows,
-                icon=QStyle.StandardPixmap.SP_DialogResetButton,
-            )
+        group_layout.addWidget(self._overlay_groups_list, 1)
+        group_layout.addWidget(self._overlay_empty_label)
+
+        settings_panel = QFrame()
+        settings_panel.setObjectName("Panel")
+        settings_layout = QVBoxLayout(settings_panel)
+        settings_layout.setContentsMargins(18, 18, 18, 18)
+        settings_layout.setSpacing(12)
+
+        settings_title = QLabel()
+        settings_title.setObjectName("PanelTitle")
+        self._bind_text(settings_title, "label.selected_overlay_group_settings")
+        settings_layout.addWidget(settings_title)
+
+        form = QGridLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+        form.setColumnStretch(1, 1)
+        self._add_overlay_setting_row(form, 0, "label.overlay_group_name", self._overlay_name_edit)
+        self._add_overlay_setting_row(
+            form,
+            1,
+            "label.overlay_group_color",
+            self._overlay_color_button,
         )
+        self._add_overlay_setting_row(
+            form,
+            2,
+            "label.overlay_marker_width",
+            self._overlay_marker_width_spin,
+        )
+        self._add_overlay_setting_row(
+            form,
+            3,
+            "label.overlay_marker_height",
+            self._overlay_marker_height_spin,
+        )
+        self._add_overlay_setting_row(
+            form,
+            4,
+            "label.overlay_opacity",
+            self._overlay_opacity_spin,
+        )
+        self._add_overlay_setting_row(
+            form,
+            5,
+            "label.overlay_corner_radius",
+            self._overlay_corner_radius_spin,
+        )
+        self._add_overlay_setting_row(
+            form,
+            6,
+            "label.overlay_hover_delay",
+            self._overlay_hover_delay_spin,
+        )
+        settings_layout.addLayout(form)
+        settings_layout.addWidget(self._overlay_locked_position_checkbox)
+        settings_layout.addWidget(self._overlay_hide_fullscreen_checkbox)
+        settings_layout.addWidget(self._overlay_quick_controls_checkbox)
 
-        windows_layout.addWidget(windows_title)
-        windows_layout.addWidget(self._group_table, 1)
-        windows_layout.addWidget(self._group_empty_label)
-        windows_layout.addLayout(window_actions)
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        actions.addWidget(self._overlay_reset_position_button)
+        actions.addStretch(1)
+        actions.addWidget(self._overlay_delete_button)
+        settings_layout.addLayout(actions)
+        settings_layout.addStretch(1)
 
-        layout.addWidget(group_panel)
-        layout.addWidget(windows_panel, 1)
-        self._rebuild_group_sidebar()
+        content = QHBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(16)
+        content.addWidget(group_panel)
+        content.addWidget(settings_panel, 1)
+        layout.addLayout(content, 1)
+        self._populate_overlay_groups_list()
         return page
+
+    def _add_overlay_setting_row(
+        self,
+        layout: QGridLayout,
+        row: int,
+        label_key: str,
+        widget: QWidget,
+    ) -> None:
+        label = QLabel()
+        label.setObjectName("Muted")
+        self._bind_text(label, label_key)
+        layout.addWidget(label, row, 0)
+        layout.addWidget(widget, row, 1)
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
@@ -1500,6 +1730,426 @@ class MainWindow(QMainWindow):
             return group_id
         return DEFAULT_GROUP_ID
 
+    def _valid_overlay_group_id(self, group_id: str) -> str:
+        group_ids = {group.id for group in self._overlay_group_service.groups()}
+        if group_id in group_ids:
+            return group_id
+        groups = list(self._overlay_group_service.groups())
+        return groups[0].id if groups else ""
+
+    def _selected_overlay_group(self) -> OverlayGroup | None:
+        for group in self._overlay_group_service.groups():
+            if group.id == self._selected_overlay_group_id:
+                return group
+        return None
+
+    def _populate_overlay_groups_list(self) -> None:
+        if not hasattr(self, "_overlay_groups_list"):
+            return
+        groups = list(self._overlay_group_service.groups())
+        self._overlay_controls_syncing = True
+        self._overlay_groups_list.clear()
+        for group in groups:
+            item = QListWidgetItem(group.name)
+            item.setData(Qt.ItemDataRole.UserRole, group.id)
+            item.setToolTip(group.name)
+            self._overlay_groups_list.addItem(item)
+        self._selected_overlay_group_id = self._valid_overlay_group_id(
+            self._selected_overlay_group_id
+        )
+        selected_row = -1
+        for row, group in enumerate(groups):
+            if group.id == self._selected_overlay_group_id:
+                selected_row = row
+                break
+        self._overlay_groups_list.setCurrentRow(selected_row)
+        self._overlay_empty_label.setVisible(not groups)
+        self._overlay_groups_list.setVisible(bool(groups))
+        self._overlay_controls_syncing = False
+        self._sync_overlay_group_controls()
+
+    def _select_overlay_group_from_list(
+        self,
+        current: QListWidgetItem | None,
+        _previous: QListWidgetItem | None,
+    ) -> None:
+        if self._overlay_controls_syncing:
+            return
+        group_id = current.data(Qt.ItemDataRole.UserRole) if current is not None else ""
+        self._selected_overlay_group_id = str(group_id) if group_id else ""
+        self._sync_overlay_group_controls()
+        self._persist_overlay_groups("selected overlay group changed")
+
+    def _sync_overlay_group_controls(self) -> None:
+        group = self._selected_overlay_group()
+        enabled = group is not None
+        self._overlay_controls_syncing = True
+        self._overlay_name_edit.setEnabled(enabled)
+        self._overlay_color_button.setEnabled(enabled)
+        self._overlay_marker_width_spin.setEnabled(enabled)
+        self._overlay_marker_height_spin.setEnabled(enabled)
+        self._overlay_opacity_spin.setEnabled(enabled)
+        self._overlay_corner_radius_spin.setEnabled(enabled)
+        self._overlay_hover_delay_spin.setEnabled(enabled)
+        self._overlay_locked_position_checkbox.setEnabled(enabled)
+        self._overlay_hide_fullscreen_checkbox.setEnabled(enabled)
+        self._overlay_quick_controls_checkbox.setEnabled(enabled)
+        self._overlay_reset_position_button.setEnabled(enabled)
+        self._overlay_delete_button.setEnabled(enabled)
+        if group is None:
+            self._overlay_name_edit.clear()
+            self._overlay_marker_width_spin.setValue(10)
+            self._overlay_marker_height_spin.setValue(88)
+            self._overlay_opacity_spin.setValue(0.95)
+            self._overlay_corner_radius_spin.setValue(6)
+            self._overlay_hover_delay_spin.setValue(1200)
+            self._overlay_locked_position_checkbox.setChecked(False)
+            self._overlay_hide_fullscreen_checkbox.setChecked(True)
+            self._overlay_quick_controls_checkbox.setChecked(True)
+            self._update_overlay_color_button("#2f81f7")
+        else:
+            self._overlay_name_edit.setText(group.name)
+            self._overlay_marker_width_spin.setValue(group.marker_width)
+            self._overlay_marker_height_spin.setValue(group.marker_height)
+            self._overlay_opacity_spin.setValue(group.opacity)
+            self._overlay_corner_radius_spin.setValue(group.corner_radius)
+            self._overlay_hover_delay_spin.setValue(group.hover_delay_ms)
+            self._overlay_locked_position_checkbox.setChecked(group.locked_position)
+            self._overlay_hide_fullscreen_checkbox.setChecked(group.hide_during_fullscreen)
+            self._overlay_quick_controls_checkbox.setChecked(group.show_quick_controls)
+            self._update_overlay_color_button(group.color)
+        self._overlay_controls_syncing = False
+
+    def _set_overlay_groups_enabled(self, enabled: bool) -> None:
+        self._settings.overlay_groups_enabled = enabled
+        self._persist_overlay_groups("overlay groups enabled changed")
+
+    def _create_overlay_group(self) -> None:
+        group = self._prompt_create_overlay_group()
+        if group is None:
+            return
+        self._selected_overlay_group_id = group.id
+        self._populate_overlay_groups_list()
+        self._persist_overlay_groups("overlay group created")
+        self.statusBar().showMessage(tr("status.overlay_group_created"))
+
+    def _prompt_create_overlay_group(self) -> OverlayGroup | None:
+        name, accepted = QInputDialog.getText(
+            self,
+            tr("dialog.create_overlay_group.title"),
+            tr("dialog.create_overlay_group.message"),
+        )
+        if not accepted:
+            return None
+        try:
+            return self._overlay_group_service.create_group(name)
+        except ShelfyGAIError as exc:
+            self._show_error(str(exc))
+            return None
+
+    def _choose_overlay_group_for_assignment(self) -> OverlayGroup | None:
+        groups = list(self._overlay_group_service.groups())
+        if not groups:
+            answer = QMessageBox.question(
+                self,
+                tr("dialog.no_overlay_groups.title"),
+                tr("dialog.no_overlay_groups.message"),
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return None
+            return self._prompt_create_overlay_group()
+
+        names = [group.name for group in groups]
+        selected_name, accepted = QInputDialog.getItem(
+            self,
+            tr("dialog.choose_overlay_group.title"),
+            tr("dialog.choose_overlay_group.message"),
+            names,
+            0,
+            False,
+        )
+        if not accepted:
+            return None
+        for group in groups:
+            if group.name == selected_name:
+                return group
+        return None
+
+    def _update_overlay_name(self) -> None:
+        if self._overlay_controls_syncing:
+            return
+        group = self._selected_overlay_group()
+        if group is None:
+            return
+        name = self._overlay_name_edit.text().strip()
+        if name == group.name:
+            return
+        try:
+            updated = self._overlay_group_service.rename_group(group.id, name)
+        except ShelfyGAIError as exc:
+            self._show_error(str(exc))
+            self._sync_overlay_group_controls()
+            return
+        self._selected_overlay_group_id = updated.id
+        self._populate_overlay_groups_list()
+        self._persist_overlay_groups("overlay group renamed")
+        self.statusBar().showMessage(tr("status.overlay_group_updated"))
+
+    def _update_overlay_numeric_settings(self) -> None:
+        if self._overlay_controls_syncing:
+            return
+        group = self._selected_overlay_group()
+        if group is None:
+            return
+        self._overlay_group_service.update_group(
+            group.id,
+            marker_width=self._overlay_marker_width_spin.value(),
+            marker_height=self._overlay_marker_height_spin.value(),
+            opacity=self._overlay_opacity_spin.value(),
+            corner_radius=self._overlay_corner_radius_spin.value(),
+            hover_delay_ms=self._overlay_hover_delay_spin.value(),
+        )
+        self._persist_overlay_groups("overlay group numeric settings changed")
+
+    def _update_overlay_boolean_settings(self) -> None:
+        if self._overlay_controls_syncing:
+            return
+        group = self._selected_overlay_group()
+        if group is None:
+            return
+        self._overlay_group_service.update_group(
+            group.id,
+            locked_position=self._overlay_locked_position_checkbox.isChecked(),
+            hide_during_fullscreen=self._overlay_hide_fullscreen_checkbox.isChecked(),
+            show_quick_controls=self._overlay_quick_controls_checkbox.isChecked(),
+        )
+        self._persist_overlay_groups("overlay group behavior changed")
+
+    def _choose_overlay_color(self) -> None:
+        group = self._selected_overlay_group()
+        if group is None:
+            return
+        self._choose_overlay_color_for_group(group.id)
+
+    def _choose_overlay_color_for_group(self, group_id: str) -> None:
+        group = self._overlay_group_by_id(group_id)
+        if group is None:
+            return
+        color = QColorDialog.getColor(QColor(group.color), self, tr("dialog.choose_color.title"))
+        if not color.isValid():
+            return
+        updated = self._overlay_group_service.update_color(group.id, color.name())
+        self._selected_overlay_group_id = updated.id
+        self._sync_overlay_group_controls()
+        self._persist_overlay_groups("overlay group color changed")
+        self.statusBar().showMessage(tr("status.overlay_group_updated"))
+
+    def _reset_overlay_marker_position(self) -> None:
+        group = self._selected_overlay_group()
+        if group is None:
+            return
+        self._overlay_group_service.update_group(group.id, position_by_monitor={})
+        self._persist_overlay_groups("overlay group marker position reset")
+        self.statusBar().showMessage(tr("status.overlay_group_position_reset"))
+
+    def _delete_selected_overlay_group(self) -> None:
+        group = self._selected_overlay_group()
+        if group is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            tr("dialog.delete_overlay_group.title"),
+            tr("dialog.delete_overlay_group.message", name=group.name),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._overlay_group_service.delete_group(group.id)
+        except ShelfyGAIError as exc:
+            self._show_error(str(exc))
+            return
+        self._selected_overlay_group_id = self._valid_overlay_group_id("")
+        self._populate_overlay_groups_list()
+        self._persist_overlay_groups("overlay group deleted")
+        self.statusBar().showMessage(tr("status.overlay_group_deleted"))
+
+    def _update_overlay_color_button(self, color: str) -> None:
+        self._overlay_color_button.setText(color)
+        self._overlay_color_button.setStyleSheet(
+            "QPushButton {"
+            f"background: {color};"
+            "border-radius: 8px;"
+            "font-weight: 650;"
+            "color: #ffffff;"
+            "}"
+        )
+
+    def _persist_overlay_groups(self, reason: str) -> None:
+        self._settings.overlay_groups_enabled = self._overlay_enabled_checkbox.isChecked()
+        self._settings.selected_overlay_group_id = self._selected_overlay_group_id
+        self._settings.overlay_groups = [
+            asdict(group)
+            for group in self._overlay_group_service.groups()
+        ]
+        self._settings_store.save(self._settings, reason=reason)
+        self._sync_overlay_markers()
+
+    def _overlay_group_by_id(self, group_id: str) -> OverlayGroup | None:
+        for group in self._overlay_group_service.groups():
+            if group.id == group_id:
+                return group
+        return None
+
+    def _save_overlay_marker_position(
+        self,
+        group_id: str,
+        monitor_id: str,
+        x: int,
+        y: int,
+        edge: str,
+    ) -> None:
+        try:
+            self._overlay_group_service.update_marker_position(
+                group_id,
+                monitor_id,
+                x=x,
+                y=y,
+                edge=edge,
+            )
+        except ShelfyGAIError as exc:
+            self._show_error(str(exc))
+            return
+        self._persist_overlay_groups("overlay marker position saved")
+        LOGGER.info(
+            "Overlay marker position saved: group_id=%s monitor=%s x=%s y=%s edge=%s",
+            group_id,
+            monitor_id,
+            x,
+            y,
+            edge,
+        )
+
+    def _set_overlay_group_locked(self, group_id: str, locked: bool) -> None:
+        try:
+            self._overlay_group_service.update_group(group_id, locked_position=locked)
+        except ShelfyGAIError as exc:
+            self._show_error(str(exc))
+            return
+        if group_id == self._selected_overlay_group_id:
+            self._sync_overlay_group_controls()
+        self._persist_overlay_groups("overlay marker lock changed")
+
+    def _show_overlay_group_settings(self, group_id: str) -> None:
+        self._selected_overlay_group_id = self._valid_overlay_group_id(group_id)
+        self._populate_overlay_groups_list()
+        self._show_page(3)
+
+    def _sync_overlay_markers(self) -> None:
+        if not hasattr(self, "_overlay_marker_manager"):
+            return
+        self._overlay_marker_manager.sync(
+            list(self._overlay_group_service.groups()),
+            enabled=self._settings.overlay_groups_enabled,
+        )
+
+    def _overlay_popup_items(self, group: OverlayGroup) -> list[OverlayPopupItem]:
+        assigned_handles = set(group.assigned_window_ids)
+        if not assigned_handles:
+            return []
+        popup_items: list[OverlayPopupItem] = []
+        for item in self._shelf_service.shelved_items():
+            if item.window.handle not in assigned_handles:
+                continue
+            title = item.window.title or tr("recovery.unknown_window", handle=item.window.handle)
+            popup_items.append(
+                OverlayPopupItem(
+                    handle=item.window.handle,
+                    app_name=item.window.process_name,
+                    title=title,
+                    icon=self._icon_provider.icon_for_window(item.window),
+                )
+            )
+        return popup_items
+
+    def _overlay_assigned_handles(self, group_id: str) -> list[int]:
+        group = self._overlay_group_by_id(group_id)
+        if group is None:
+            return []
+        return list(group.assigned_window_ids)
+
+    def _overlay_hidden_handles(self, group_id: str) -> list[int]:
+        assigned = set(self._overlay_assigned_handles(group_id))
+        return [
+            item.window.handle
+            for item in self._shelf_service.shelved_items()
+            if item.window.handle in assigned
+        ]
+
+    def _open_overlay_window(self, _group_id: str, handle: int) -> None:
+        self._bring_handles_forward([handle])
+
+    def _restore_overlay_window(self, _group_id: str, handle: int) -> None:
+        self._restore_handles([handle])
+        self._sync_overlay_markers()
+
+    def _restore_overlay_group_windows(self, group_id: str) -> None:
+        handles = self._overlay_hidden_handles(group_id)
+        if not handles:
+            self.statusBar().showMessage(tr("status.overlay_group_no_hidden_windows"))
+            return
+        self._restore_handles(handles)
+        self._sync_overlay_markers()
+
+    def _hide_overlay_group_windows(self, group_id: str) -> None:
+        assigned = set(self._overlay_assigned_handles(group_id))
+        hidden = set(self._overlay_hidden_handles(group_id))
+        handles = [
+            window.handle
+            for window in self._shelf_service.available_windows()
+            if window.handle in assigned and window.handle not in hidden
+        ]
+        if not handles:
+            self.statusBar().showMessage(tr("status.overlay_group_no_open_windows"))
+            return
+
+        self._set_loading(True, tr("status.loading_hiding"))
+        hidden_count = 0
+        try:
+            for handle in handles:
+                self._shelf_service.shelve(
+                    handle,
+                    group_id=DEFAULT_GROUP_ID,
+                    hide_options=HideOptions(),
+                )
+                hidden_count += 1
+                self._sync_recovery_state("overlay group window hidden")
+            self._persist_managed_state("overlay group windows hidden")
+            self._refresh()
+            self.statusBar().showMessage(
+                tr("status.overlay_group_hidden_count", count=hidden_count)
+            )
+        except ShelfyGAIError as exc:
+            LOGGER.exception("Overlay group hide-all failed")
+            self._show_error(str(exc))
+        except Exception:
+            LOGGER.exception("Unexpected overlay group hide-all failure")
+            self._show_error(tr("error.shelve"))
+        finally:
+            self._set_loading(False)
+
+    def _remove_overlay_window_from_group(self, group_id: str, handle: int) -> None:
+        try:
+            self._overlay_group_service.remove_window(group_id, handle)
+        except ShelfyGAIError as exc:
+            self._show_error(str(exc))
+            return
+        self._persist_overlay_groups("window removed from overlay group")
+        self.statusBar().showMessage(tr("status.overlay_window_removed"))
+
+    def _open_from_overlay_popup(self) -> None:
+        self._show_from_tray()
+        self._show_page(3)
+
     def _rebuild_group_sidebar(self) -> None:
         self._clear_layout(self._groups_layout)
         self._group_buttons.clear()
@@ -1604,6 +2254,9 @@ class MainWindow(QMainWindow):
 
     def _assign_window_to_group(self, handle: int, group_id: str) -> None:
         try:
+            needs_unpin = self._is_pinned_handle(handle)
+            if needs_unpin and not self._confirm_unpin_before_group_action(handle):
+                return
             if self._shelf_service.assign_to_group(handle, group_id):
                 self._selected_group_id = group_id
                 self._persist_managed_state("window assigned to group")
@@ -1612,6 +2265,20 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(tr("status.moved_to_group"))
         except ShelfyGAIError as exc:
             self._show_error(str(exc))
+
+    def _confirm_unpin_before_group_action(self, handle: int) -> bool:
+        answer = QMessageBox.question(
+            self,
+            tr("dialog.unpin_before_group.title"),
+            tr("dialog.unpin_before_group.message"),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        if not self._shelf_service.unpin(handle):
+            self._show_hide_pinned_message()
+            return False
+        self._sync_recovery_state("window unpinned before group action")
+        return True
 
     def _restore_selected_group_windows(self) -> None:
         handles = self._selected_handles(self._group_table)
@@ -1651,6 +2318,10 @@ class MainWindow(QMainWindow):
             self._last_shelf_items = shelf_items
             pinned_items = tuple(self._shelf_service.pinned_items())
             self._last_pinned_items = pinned_items
+            overlay_pruned = self._prune_stale_overlay_group_entries(
+                available_windows,
+                shelf_items,
+            )
 
             populate_started = perf_counter()
             self._populate_available(available_windows)
@@ -1672,6 +2343,7 @@ class MainWindow(QMainWindow):
                 )
             )
             self._sync_tray_actions()
+            self._sync_overlay_markers()
             icon_stats = self._icon_provider.cache_stats()
             log_performance(
                 "refresh",
@@ -1683,11 +2355,18 @@ class MainWindow(QMainWindow):
                 managed_count=shelf_count,
                 pinned_count=len(pinned_items),
                 pruned_count=pruned_count,
+                overlay_pruned_count=overlay_pruned,
                 available_ms=f"{available_ms:.1f}",
                 prune_ms=f"{prune_ms:.1f}",
                 populate_ms=f"{populate_ms:.1f}",
                 icon_cache=icon_stats["cached"],
                 icon_pending=icon_stats["pending"],
+                icon_hits=icon_stats["hits"],
+                icon_misses=icon_stats["misses"],
+                icon_loaded=icon_stats["loaded"],
+                icon_failed=icon_stats["failed"],
+                overlay_marker_count=self._overlay_marker_manager.marker_count(),
+                active_watcher_count=self._active_watcher_count(),
             )
         except ShelfyGAIError as exc:
             LOGGER.exception("Refresh failed")
@@ -1702,6 +2381,18 @@ class MainWindow(QMainWindow):
         self._populate_table(self._available_table, windows)
         self._apply_open_windows_filter()
         self._update_selected_window_card()
+
+    def _prune_stale_overlay_group_entries(
+        self,
+        available_windows: Sequence[WindowInfo],
+        shelf_items: Sequence[ShelfItem],
+    ) -> int:
+        valid_handles = {window.handle for window in available_windows}
+        valid_handles.update(item.window.handle for item in shelf_items)
+        pruned = self._overlay_group_service.prune_stale_window_ids(valid_handles)
+        if pruned:
+            self._persist_overlay_groups("stale overlay group windows pruned")
+        return pruned
 
     def _populate_shelf(
         self,
@@ -1729,15 +2420,12 @@ class MainWindow(QMainWindow):
             self._pinned_empty_label,
             tr("empty.pinned_windows"),
         )
+        self._apply_pinned_z_order()
         self._configure_pinned_watcher()
 
     def _ordered_pinned_items(self, items: Sequence[PinnedItem]) -> list[PinnedItem]:
-        by_handle = {item.window.handle: item for item in items}
-        self._pinned_order = [handle for handle in self._pinned_order if handle in by_handle]
-        for item in items:
-            if item.window.handle not in self._pinned_order:
-                self._pinned_order.append(item.window.handle)
-        return [by_handle[handle] for handle in self._pinned_order if handle in by_handle]
+        self._pinned_order = ordered_pinned_handles(items, self._pinned_order)
+        return ordered_pinned_items(items, self._pinned_order)
 
     def _populate_group_table(self, items: Sequence[ShelfItem]) -> None:
         windows = [
@@ -1774,8 +2462,15 @@ class MainWindow(QMainWindow):
             self._selected_window_state.setText("")
             self._selected_window_hint.setVisible(True)
             self._selected_window_hint.setText(tr("selected.none.hint"))
+            if self._selected_hide_button is not None:
+                self._selected_hide_button.setEnabled(False)
+                self._selected_hide_button.setToolTip("")
+            if self._selected_overlay_group_button is not None:
+                self._selected_overlay_group_button.setEnabled(False)
+                self._selected_overlay_group_button.setToolTip("")
             return
 
+        is_pinned = self._is_pinned_handle(window.handle)
         self._selected_window_icon.setPixmap(
             self._icon_pixmap(window, 24, self._selected_window_icon)
         )
@@ -1783,6 +2478,18 @@ class MainWindow(QMainWindow):
         self._selected_window_title.setText(window.title)
         self._selected_window_state.setText(self._window_state_text(self._available_table, window))
         self._selected_window_hint.setVisible(False)
+        if self._selected_hide_button is not None:
+            self._selected_hide_button.setEnabled(not is_pinned)
+            self._selected_hide_button.setToolTip(
+                tr("error.hide_pinned_window") if is_pinned else tr("tooltip.hide_selected")
+            )
+        if self._selected_overlay_group_button is not None:
+            self._selected_overlay_group_button.setEnabled(not is_pinned)
+            self._selected_overlay_group_button.setToolTip(
+                tr("error.hide_pinned_window")
+                if is_pinned
+                else tr("tooltip.add_to_overlay_group")
+            )
 
     def _icon_for_window(self, window: WindowInfo, *, queue: bool = True) -> QIcon:
         return self._icon_provider.icon_for_window(window, queue=queue)
@@ -1798,9 +2505,25 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
 
     def _populate_table(self, table: QTableWidget, windows: Sequence[WindowInfo]) -> None:
+        signature = tuple(
+            (
+                window.handle,
+                window.process_name,
+                window.title,
+                window.process_id,
+                window.executable_path or "",
+                window.is_minimized,
+                self._window_state_text(table, window),
+            )
+            for window in windows
+        )
+        if table.property("shelfygai_signature") == signature:
+            return
+
         table.setUpdatesEnabled(False)
         table.setSortingEnabled(False)
         table.setRowCount(len(windows))
+        table.setProperty("shelfygai_signature", signature)
 
         try:
             for row, window in enumerate(windows):
@@ -1837,6 +2560,8 @@ class MainWindow(QMainWindow):
 
     def _window_state_text(self, table: QTableWidget, window: WindowInfo) -> str:
         if table is self._available_table:
+            if self._is_pinned_handle(window.handle):
+                return tr("state.pinned")
             return tr("state.minimized" if window.is_minimized else "state.open")
         if table is self._pinned_table:
             return tr("state.pinned")
@@ -1860,6 +2585,9 @@ class MainWindow(QMainWindow):
             executable_path = item.data(EXE_PATH_ROLE)
             if isinstance(executable_path, str):
                 item.setIcon(self._icon_provider.icon_for_executable(executable_path))
+
+    def _schedule_open_windows_filter(self) -> None:
+        self._open_windows_filter_timer.start()
 
     def _apply_open_windows_filter(self) -> None:
         query = self._open_windows_search.text().strip().lower()
@@ -2076,12 +2804,26 @@ class MainWindow(QMainWindow):
         self._pinned_watcher_timer.setInterval(interval)
         should_run = (
             self._settings.prevent_minimize_watcher_enabled
-            and self._shelf_service.has_pinned_windows()
+            and self._shelf_service.has_prevent_minimize_pinned_windows()
         )
         if should_run:
             self._pinned_watcher_timer.start()
         else:
             self._pinned_watcher_timer.stop()
+
+    def _active_watcher_count(self) -> int:
+        count = 0
+        if self._open_windows_refresh_timer.isActive():
+            count += 1
+        if self._open_windows_filter_timer.isActive():
+            count += 1
+        if self._pinned_watcher_timer.isActive():
+            count += 1
+        if self._overlay_marker_manager.fullscreen_watcher_active():
+            count += 1
+        if self._icon_provider.cache_stats()["timer_active"]:
+            count += 1
+        return count
 
     def _check_pinned_windows(self) -> None:
         try:
@@ -2104,6 +2846,48 @@ class MainWindow(QMainWindow):
             if isinstance(handle, int):
                 handles.add(handle)
         return sorted(handles)
+
+    def _first_selected_handle(self, table: QTableWidget) -> int | None:
+        selection_model = table.selectionModel()
+        if selection_model is None:
+            return None
+        rows = sorted(index.row() for index in selection_model.selectedRows())
+        for row in rows:
+            item = table.item(row, 0)
+            if item is None:
+                continue
+            handle = item.data(HANDLE_ROLE)
+            if isinstance(handle, int):
+                return handle
+        return None
+
+    def _select_table_handle(self, table: QTableWidget, handle: int) -> None:
+        table.clearSelection()
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is not None and item.data(HANDLE_ROLE) == handle:
+                table.selectRow(row)
+                break
+
+    def _pinned_handle_set(self) -> set[int]:
+        return {item.window.handle for item in self._shelf_service.pinned_items()}
+
+    def _is_pinned_handle(self, handle: int) -> bool:
+        return handle in self._pinned_handle_set()
+
+    def _handles_include_pinned(self, handles: Sequence[int]) -> bool:
+        pinned_handles = self._pinned_handle_set()
+        return any(handle in pinned_handles for handle in handles)
+
+    def _show_hide_pinned_message(self) -> None:
+        message = tr("error.hide_pinned_window")
+        self.statusBar().showMessage(message)
+        self._tray_notify(
+            tr("error.notification.title"),
+            message,
+            icon=QSystemTrayIcon.MessageIcon.Warning,
+            duration_ms=5_000,
+        )
 
     def _context_handles(self, table: QTableWidget, position: QPoint) -> list[int]:
         row = table.rowAt(position.y())
@@ -2133,12 +2917,27 @@ class MainWindow(QMainWindow):
             bring_action.triggered.connect(
                 lambda _checked=False: self._bring_handles_forward(handles)
             )
+            diagnostics_action = menu.addAction(tr("action.copy_pin_diagnostics"))
+            diagnostics_action.triggered.connect(
+                lambda _checked=False: self._copy_pin_diagnostics(handles)
+            )
             hide_action = menu.addAction(tr("action.hide_selected"))
+            hide_blocked = self._handles_include_pinned(handles)
+            hide_action.setEnabled(not hide_blocked)
+            if hide_blocked:
+                hide_action.setToolTip(tr("error.hide_pinned_window"))
             hide_action.triggered.connect(
                 lambda _checked=False: self._shelve_handles(
                     handles,
                     confirm=self._confirm_checkbox.isChecked(),
                 )
+            )
+            overlay_group_action = menu.addAction(tr("action.add_to_overlay_group"))
+            overlay_group_action.setEnabled(not hide_blocked)
+            if hide_blocked:
+                overlay_group_action.setToolTip(tr("error.hide_pinned_window"))
+            overlay_group_action.triggered.connect(
+                lambda _checked=False: self._add_handles_to_overlay_group(handles)
             )
         elif table is self._pinned_table:
             unpin_action = menu.addAction(tr("action.unpin_window"))
@@ -2154,7 +2953,11 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             bring_action = menu.addAction(tr("action.bring_to_front"))
             bring_action.triggered.connect(
-                lambda _checked=False: self._bring_handles_forward(handles)
+                lambda _checked=False: self._bring_pinned_handles_to_front(handles)
+            )
+            diagnostics_action = menu.addAction(tr("action.copy_pin_diagnostics"))
+            diagnostics_action.triggered.connect(
+                lambda _checked=False: self._copy_pin_diagnostics(handles)
             )
         elif table in (self._shelf_table, self._group_table):
             restore_action = menu.addAction(tr("action.restore_selected"))
@@ -2164,6 +2967,14 @@ class MainWindow(QMainWindow):
             bring_action = menu.addAction(tr("action.bring_to_front"))
             bring_action.triggered.connect(
                 lambda _checked=False: self._bring_handles_forward(handles)
+            )
+            move_overlay_action = menu.addAction(tr("action.move_to_overlay_group"))
+            move_overlay_action.triggered.connect(
+                lambda _checked=False: self._move_hidden_handles_to_overlay_group(handles)
+            )
+            remove_overlay_action = menu.addAction(tr("action.remove_from_overlay_group"))
+            remove_overlay_action.triggered.connect(
+                lambda _checked=False: self._remove_handles_from_overlay_groups(handles)
             )
 
         if menu.actions():
@@ -2190,6 +3001,7 @@ class MainWindow(QMainWindow):
                     allow_own_window=self._settings.allow_pin_shelfygai_window,
                 )
                 pinned_count += 1
+                self._sync_recovery_state("window pinned")
             self._refresh(reason="windows pinned")
             self.statusBar().showMessage(tr("status.pinned_count", count=pinned_count))
             self._tray_notify(
@@ -2219,28 +3031,45 @@ class MainWindow(QMainWindow):
         self._unpin_handles(handles)
 
     def _move_pinned_selection(self, direction: int) -> None:
-        handles = self._selected_handles(self._pinned_table)
-        if not handles:
+        handle = self._first_selected_handle(self._pinned_table)
+        if handle is None:
             self.statusBar().showMessage(tr("status.select_pinned_unpin"))
             return
-        handle = handles[0]
-        if handle not in self._pinned_order:
+        reordered = move_handle(self._pinned_order, handle, direction)
+        if reordered == self._pinned_order:
             return
-        index = self._pinned_order.index(handle)
-        target = index + direction
-        if target < 0 or target >= len(self._pinned_order):
-            return
-        self._pinned_order[index], self._pinned_order[target] = (
-            self._pinned_order[target],
-            self._pinned_order[index],
-        )
+        self._pinned_order = reordered
         self._populate_pinned(self._last_pinned_items)
-        for row in range(self._pinned_table.rowCount()):
-            item = self._pinned_table.item(row, 0)
-            if item is not None and item.data(HANDLE_ROLE) == handle:
-                self._pinned_table.selectRow(row)
-                break
+        self._select_table_handle(self._pinned_table, handle)
         self.statusBar().showMessage(tr("status.pinned_order_changed"))
+
+    def _bring_pinned_selection_to_front(self) -> None:
+        handle = self._first_selected_handle(self._pinned_table)
+        if handle is None:
+            self.statusBar().showMessage(tr("status.select_pinned_unpin"))
+            return
+        self._bring_pinned_handles_to_front([handle])
+
+    def _bring_pinned_handles_to_front(self, handles: list[int]) -> None:
+        pinned_handles = [handle for handle in handles if handle in self._pinned_order]
+        if not pinned_handles:
+            self.statusBar().showMessage(tr("status.select_pinned_unpin"))
+            return
+        handle = pinned_handles[0]
+        self._pinned_order = bring_handle_to_front(self._pinned_order, handle)
+        self._populate_pinned(self._last_pinned_items)
+        self._select_table_handle(self._pinned_table, handle)
+        self._bring_handles_forward([handle])
+        self.statusBar().showMessage(tr("status.pinned_order_changed"))
+
+    def _apply_pinned_z_order(self) -> None:
+        if not self._pinned_order:
+            return
+        try:
+            applied = self._shelf_service.apply_pinned_order(self._pinned_order)
+            LOGGER.debug("Applied pinned z-order bottom_to_top=%s", list(applied))
+        except Exception:
+            LOGGER.exception("Could not apply pinned z-order")
 
     def _unpin_handles(self, handles: list[int]) -> tuple[int, int]:
         if not handles:
@@ -2255,6 +3084,7 @@ class MainWindow(QMainWindow):
                     unpinned += 1
                 else:
                     skipped += 1
+            self._sync_recovery_state("windows unpinned")
             self._refresh(reason="windows unpinned")
             self.statusBar().showMessage(self._unpin_summary(unpinned, skipped))
             self._tray_notify(
@@ -2274,6 +3104,23 @@ class MainWindow(QMainWindow):
         finally:
             self._set_loading(False)
         return unpinned, skipped
+
+    def _copy_pin_diagnostics(self, handles: list[int]) -> None:
+        if not handles:
+            return
+        try:
+            diagnostics = [
+                self._shelf_service.pin_diagnostics(handle)
+                for handle in handles
+            ]
+            clipboard = QApplication.clipboard()
+            clipboard.setText("\n\n---\n\n".join(diagnostics))
+            self.statusBar().showMessage(
+                tr("status.pin_diagnostics_copied", count=len(handles))
+            )
+        except Exception:
+            LOGGER.exception("Could not copy pin diagnostics")
+            self._show_error(tr("error.pin_diagnostics"))
 
     def _set_prevent_minimize_for_handles(self, handles: list[int], enabled: bool) -> None:
         if not handles:
@@ -2295,6 +3142,7 @@ class MainWindow(QMainWindow):
                     continue
                 if self._shelf_service.set_prevent_minimize(handle, enabled):
                     updated += 1
+            self._sync_recovery_state("pinned prevent-minimize changed")
             self._refresh(reason="pinned prevent-minimize changed")
             status_key = (
                 "status.prevent_minimize_enabled"
@@ -2309,10 +3157,120 @@ class MainWindow(QMainWindow):
             LOGGER.exception("Unexpected prevent-minimize update failure")
             self._show_error(tr("error.prevent_minimize"))
 
+    def _add_selected_to_overlay_group(self) -> None:
+        handles = self._selected_handles(self._available_table)
+        if not handles:
+            self.statusBar().showMessage(tr("status.select_open_hide"))
+            return
+        self._add_handles_to_overlay_group(handles)
+
+    def _add_handles_to_overlay_group(self, handles: list[int]) -> int:
+        if not handles:
+            return 0
+        if self._handles_include_pinned(handles):
+            self._show_hide_pinned_message()
+            return 0
+        group = self._choose_overlay_group_for_assignment()
+        if group is None:
+            return 0
+        self._enable_overlay_groups_for_assignment()
+
+        hide_options = HideOptions(
+            hide_taskbar=True,
+            hide_alt_tab=self._hide_alt_tab_checkbox.isChecked(),
+            hide_tray=False,
+        )
+        assigned_count = 0
+        self._set_loading(True, tr("status.loading_hiding"))
+        try:
+            for handle in handles:
+                self._shelf_service.shelve(
+                    handle,
+                    group_id=DEFAULT_GROUP_ID,
+                    hide_options=hide_options,
+                )
+                self._overlay_group_service.assign_window(group.id, handle)
+                assigned_count += 1
+                self._sync_recovery_state("window added to overlay group")
+            self._selected_overlay_group_id = group.id
+            self._persist_managed_state("windows added to overlay group")
+            self._refresh(reason="windows added to overlay group")
+            self.statusBar().showMessage(
+                tr("status.overlay_assigned_count", count=assigned_count)
+            )
+            return assigned_count
+        except ShelfyGAIError as exc:
+            LOGGER.exception("Add to overlay group failed")
+            if assigned_count:
+                self._persist_managed_state("partial overlay assignment failure")
+                self._refresh(reason="partial overlay assignment failure")
+            self._show_error(str(exc))
+        except Exception:
+            LOGGER.exception("Unexpected add to overlay group failure")
+            if assigned_count:
+                self._persist_managed_state("partial overlay assignment failure")
+                self._refresh(reason="partial overlay assignment failure")
+            self._show_error(tr("error.shelve"))
+        finally:
+            self._set_loading(False)
+        return assigned_count
+
+    def _move_selected_hidden_to_overlay_group(self) -> None:
+        handles = self._selected_handles(self._shelf_table)
+        self._move_hidden_handles_to_overlay_group(handles)
+
+    def _move_hidden_handles_to_overlay_group(self, handles: list[int]) -> int:
+        if not handles:
+            self.statusBar().showMessage(tr("status.select_managed_restore"))
+            return 0
+        group = self._choose_overlay_group_for_assignment()
+        if group is None:
+            return 0
+        self._enable_overlay_groups_for_assignment()
+        for handle in handles:
+            self._overlay_group_service.assign_window(group.id, handle)
+        self._selected_overlay_group_id = group.id
+        self._persist_overlay_groups("hidden windows moved to overlay group")
+        self.statusBar().showMessage(
+            tr("status.overlay_assigned_count", count=len(handles))
+        )
+        return len(handles)
+
+    def _remove_selected_from_overlay_group(self) -> None:
+        handles = self._selected_handles(self._shelf_table)
+        self._remove_handles_from_overlay_groups(handles)
+
+    def _remove_handles_from_overlay_groups(self, handles: list[int]) -> int:
+        if not handles:
+            self.statusBar().showMessage(tr("status.select_managed_restore"))
+            return 0
+        removed = 0
+        for handle in handles:
+            removed += self._overlay_group_service.remove_window_from_all(handle)
+        if removed:
+            self._persist_overlay_groups("windows removed from overlay groups")
+            self.statusBar().showMessage(
+                tr("status.overlay_removed_count", count=removed)
+            )
+        else:
+            self.statusBar().showMessage(tr("status.overlay_not_assigned"))
+        return removed
+
+    def _enable_overlay_groups_for_assignment(self) -> None:
+        if self._settings.overlay_groups_enabled:
+            return
+        self._settings.overlay_groups_enabled = True
+        previous = self._overlay_enabled_checkbox.blockSignals(True)
+        self._overlay_enabled_checkbox.setChecked(True)
+        self._overlay_enabled_checkbox.blockSignals(previous)
+
     def _shelve_selected(self) -> None:
         handles = self._selected_handles(self._available_table)
         if not handles:
             self.statusBar().showMessage(tr("status.select_open_hide"))
+            return
+        if self._handles_include_pinned(handles):
+            self._show_hide_pinned_message()
             return
         self._shelve_handles(handles, confirm=self._confirm_checkbox.isChecked())
 
@@ -2325,12 +3283,22 @@ class MainWindow(QMainWindow):
     ) -> int:
         if not handles:
             return 0
+        if self._handles_include_pinned(handles):
+            self._show_hide_pinned_message()
+            return 0
 
-        if confirm:
+        hide_options = self._selected_hide_options()
+        if not hide_options.has_any_target:
+            self._show_error(tr("error.hide_options_empty"))
+            return 0
+
+        limitation = self._hide_options_limitation_message(hide_options)
+        if confirm or limitation:
+            message = self._hide_confirmation_message(len(handles), hide_options)
             answer = QMessageBox.question(
                 self,
                 tr("dialog.hide_windows.title"),
-                tr("dialog.hide_windows.message", count=len(handles)),
+                message,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return 0
@@ -2339,7 +3307,11 @@ class MainWindow(QMainWindow):
         hidden_count = 0
         try:
             for handle in handles:
-                self._shelf_service.shelve(handle, group_id=self._selected_group_id)
+                self._shelf_service.shelve(
+                    handle,
+                    group_id=self._selected_group_id,
+                    hide_options=hide_options,
+                )
                 hidden_count += 1
                 self._sync_recovery_state("window hidden")
             self._persist_managed_state(reason)
@@ -2366,6 +3338,19 @@ class MainWindow(QMainWindow):
             self._set_loading(False)
         return 0
 
+    def _selected_hide_options(self) -> HideOptions:
+        return HideOptions(
+            hide_taskbar=self._hide_taskbar_checkbox.isChecked(),
+            hide_alt_tab=self._hide_alt_tab_checkbox.isChecked(),
+            hide_tray=self._hide_tray_checkbox.isChecked(),
+        )
+
+    def _hide_confirmation_message(self, count: int, options: HideOptions) -> str:
+        return hide_confirmation_message(count, options)
+
+    def _hide_options_limitation_message(self, options: HideOptions) -> str:
+        return hide_limitation_message(options)
+
     def _quick_hide_from_hotkey(self) -> None:
         handles = self._selected_handles(self._available_table) if self.isActiveWindow() else []
         if handles:
@@ -2373,7 +3358,10 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            item = self._shelf_service.shelve_foreground(group_id=self._selected_group_id)
+            item = self._shelf_service.shelve_foreground(
+                group_id=self._selected_group_id,
+                hide_options=HideOptions(),
+            )
             self._sync_recovery_state("foreground window hidden by hotkey")
             self._persist_managed_state("foreground window hidden by hotkey")
             self._refresh()
@@ -2727,7 +3715,7 @@ class MainWindow(QMainWindow):
             )
             self._restore_on_exit_checkbox.setChecked(self._settings.restore_windows_on_exit)
             self._restore_pinned_on_exit_checkbox.setChecked(
-                self._settings.restore_pinned_windows_on_exit
+                True
             )
             self._focus_restored_checkbox.setChecked(self._settings.focus_restored_windows)
             self._confirm_checkbox.setChecked(self._settings.confirm_before_hiding)
@@ -2828,9 +3816,7 @@ class MainWindow(QMainWindow):
             self._open_windows_auto_refresh_checkbox.isChecked()
         )
         self._settings.restore_windows_on_exit = self._restore_on_exit_checkbox.isChecked()
-        self._settings.restore_pinned_windows_on_exit = (
-            self._restore_pinned_on_exit_checkbox.isChecked()
-        )
+        self._settings.restore_pinned_windows_on_exit = True
         self._settings.focus_restored_windows = self._focus_restored_checkbox.isChecked()
         self._settings.confirm_before_hiding = self._confirm_checkbox.isChecked()
         self._settings.confirm_quit_with_hidden_windows = (
@@ -2901,8 +3887,9 @@ class MainWindow(QMainWindow):
 
     def _cleanup_before_exit(self) -> bool:
         self._save_settings()
-        if self._settings.restore_pinned_windows_on_exit:
-            self._restore_pinned_for_exit()
+        if hasattr(self, "_overlay_marker_manager"):
+            self._overlay_marker_manager.hide_all()
+        self._restore_pinned_for_exit()
         if not self._shelf_service.has_shelved_windows():
             self._recovery_store.clear(reason="normal exit")
             return True
@@ -2933,7 +3920,7 @@ class MainWindow(QMainWindow):
         self._persist_managed_state("normal exit restore")
         if self._shelf_service.has_shelved_windows():
             LOGGER.error(
-                "Normal exit blocked because managed windows remain after restore: "
+                "Normal exit blocked because hidden windows remain after restore: "
                 "restored=%s skipped=%s remaining=%s",
                 restored,
                 skipped,
@@ -2970,6 +3957,8 @@ class MainWindow(QMainWindow):
         self._is_quitting = True
         self._cleanup_global_hotkeys()
         self._hide_tray_icon()
+        if hasattr(self, "_overlay_marker_manager"):
+            self._overlay_marker_manager.hide_all()
         try:
             self._shelf_service.unpin_all()
         except Exception:
@@ -2977,7 +3966,7 @@ class MainWindow(QMainWindow):
         managed_count = len(self._shelf_service.shelved_items())
         self._sync_recovery_state("fatal crash before restore")
         if managed_count == 0:
-            return {"attempted": False, "managed_count": 0, "reason": "no managed windows"}
+            return {"attempted": False, "managed_count": 0, "reason": "no hidden windows"}
 
         try:
             restored, skipped = self._shelf_service.restore_all(focus=False)
@@ -3018,8 +4007,9 @@ class MainWindow(QMainWindow):
 
     def _sync_recovery_state(self, reason: str) -> None:
         records = self._recovery_records()
-        if records:
-            self._recovery_store.save(records, reason=reason)
+        pinned_records = self._pinned_recovery_records()
+        if records or pinned_records:
+            self._recovery_store.save(records, pinned_records=pinned_records, reason=reason)
         else:
             self._recovery_store.clear(reason=reason)
 
@@ -3032,7 +4022,7 @@ class MainWindow(QMainWindow):
             original_extended_style = getattr(style, "original_extended_style", None)
             if not isinstance(original_extended_style, int):
                 LOGGER.warning(
-                    "Skipping recovery state for managed window without original style: "
+                    "Skipping recovery state for hidden window without original style: "
                     "handle=%s",
                     item.window.handle,
                 )
@@ -3053,6 +4043,22 @@ class MainWindow(QMainWindow):
                 record["managed_extended_style"] = managed_extended_style
             records.append(record)
         return records
+
+    def _pinned_recovery_records(self) -> list[dict[str, object]]:
+        boot_id = current_boot_id()
+        return [
+            {
+                "boot_id": boot_id,
+                "handle": item.window.handle,
+                "title": item.window.title,
+                "process_id": item.window.process_id,
+                "process_name": item.window.process_name,
+                "executable_path": item.window.executable_path,
+                "pinned_at": item.pinned_at.isoformat(),
+                "prevent_minimize": item.prevent_minimize,
+            }
+            for item in self._shelf_service.pinned_items()
+        ]
 
     def _apply_runtime_state_to_settings(self) -> None:
         self._settings.selected_group_id = self._valid_group_id(self._selected_group_id)
@@ -3078,6 +4084,75 @@ class MainWindow(QMainWindow):
             }
             for item in self._shelf_service.shelved_items()
         ]
+        if hasattr(self, "_overlay_group_service"):
+            self._settings.overlay_groups_enabled = self._overlay_enabled_checkbox.isChecked()
+            self._settings.selected_overlay_group_id = self._selected_overlay_group_id
+            self._settings.overlay_groups = [
+                asdict(group)
+                for group in self._overlay_group_service.groups()
+            ]
+
+
+def _overlay_groups_from_settings(groups: Sequence[dict[str, object]]) -> list[OverlayGroup]:
+    parsed: list[OverlayGroup] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        group_id = group.get("id")
+        name = group.get("name")
+        if not isinstance(group_id, str) or not group_id.strip():
+            continue
+        if not isinstance(name, str) or not name.strip():
+            continue
+        position_by_monitor = group.get("position_by_monitor", {})
+        assigned_window_ids = group.get("assigned_window_ids", [])
+        parsed.append(
+            OverlayGroup(
+                id=group_id.strip(),
+                name=name.strip(),
+                color=_overlay_string(group.get("color"), "#2f81f7"),
+                marker_width=_overlay_int(group.get("marker_width"), 10),
+                marker_height=_overlay_int(group.get("marker_height"), 88),
+                opacity=_overlay_float(group.get("opacity"), 0.95),
+                corner_radius=_overlay_int(group.get("corner_radius"), 6),
+                hover_delay_ms=_overlay_int(group.get("hover_delay_ms"), 1200),
+                locked_position=_overlay_bool(group.get("locked_position"), False),
+                hide_during_fullscreen=_overlay_bool(
+                    group.get("hide_during_fullscreen"),
+                    True,
+                ),
+                show_quick_controls=_overlay_bool(group.get("show_quick_controls"), True),
+                position_by_monitor=(
+                    dict(position_by_monitor)
+                    if isinstance(position_by_monitor, dict)
+                    else {}
+                ),
+                assigned_window_ids=(
+                    [handle for handle in assigned_window_ids if isinstance(handle, int)]
+                    if isinstance(assigned_window_ids, list)
+                    else []
+                ),
+            )
+        )
+    return parsed
+
+
+def _overlay_string(value: object, default: str) -> str:
+    return value if isinstance(value, str) else default
+
+
+def _overlay_int(value: object, default: int) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
+def _overlay_float(value: object, default: float) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return default
+
+
+def _overlay_bool(value: object, default: bool) -> bool:
+    return value if isinstance(value, bool) else default
 
 
 def _startup_status_text(status: object) -> str:

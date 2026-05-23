@@ -43,12 +43,14 @@ class RecoveryDialog(QDialog):
         self,
         crash_manager: CrashManager,
         restore_record: RecoveryCallback,
+        unpin_pinned_record: RecoveryCallback | None = None,
         *,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._crash_manager = crash_manager
         self._restore_record = restore_record
+        self._unpin_pinned_record = unpin_pinned_record
         self._result = DetailedRecoveryResult(
             source_path=str(self._crash_manager.recovery_store.path)
         )
@@ -74,6 +76,8 @@ class RecoveryDialog(QDialog):
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
         )
         self._restore_button.clicked.connect(self.restore_everything_now)
+        self._unpin_pinned_button = QPushButton()
+        self._unpin_pinned_button.clicked.connect(self.unpin_remembered_windows)
         self._continue_button = QPushButton()
         self._continue_button.clicked.connect(self.accept)
 
@@ -138,7 +142,46 @@ class RecoveryDialog(QDialog):
             self._result.failed > 0 and self._crash_manager.recovery_store.exists()
         )
         self._running = False
+        self._sync_unpin_pinned_button()
         LOGGER.warning("Emergency recovery screen result: %s", self._result.as_dict())
+
+    def unpin_remembered_windows(self) -> None:
+        if self._running or self._unpin_pinned_record is None:
+            return
+
+        self._running = True
+        self._restore_button.setEnabled(False)
+        self._unpin_pinned_button.setEnabled(False)
+        self._continue_button.setEnabled(False)
+        self._status_label.setText(tr("recovery.status.unpinning_pinned"))
+        QApplication.processEvents()
+        LOGGER.warning("Remembered pinned-window unpin requested from recovery screen")
+
+        try:
+            self._result = self._crash_manager.recover_previous_pinned_detailed(
+                self._unpin_pinned_record
+            )
+        except Exception as exc:
+            LOGGER.exception("Remembered pinned-window recovery failed unexpectedly")
+            self._result = DetailedRecoveryResult(
+                items=(
+                    RecoveryWindowResult(
+                        handle=0,
+                        title="",
+                        process_id=0,
+                        process_name="",
+                        status=RECOVERY_STATUS_FAILED,
+                        reason=RECOVERY_REASON_ERROR,
+                        detail=str(exc),
+                    ),
+                ),
+                source_path=str(self._crash_manager.recovery_store.path),
+            )
+
+        self._populate_results()
+        self._continue_button.setEnabled(True)
+        self._running = False
+        self._sync_unpin_pinned_button()
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -181,6 +224,7 @@ class RecoveryDialog(QDialog):
 
         footer = QHBoxLayout()
         footer.addStretch(1)
+        footer.addWidget(self._unpin_pinned_button)
         footer.addWidget(self._restore_button)
         footer.addWidget(self._continue_button)
         layout.addLayout(footer)
@@ -188,17 +232,32 @@ class RecoveryDialog(QDialog):
     def _retranslate(self) -> None:
         self.setWindowTitle(tr("recovery.title"))
         self._restore_button.setText(tr("recovery.restore_now"))
+        self._unpin_pinned_button.setText(tr("recovery.unpin_pinned_now"))
         self._continue_button.setText(tr("recovery.continue"))
+        self._sync_unpin_pinned_button()
 
     def _show_initial_state(self) -> None:
         payload = self._crash_manager.recovery_store.load()
         records = _records_from_payload(payload)
-        if records:
-            self._status_label.setText(tr("recovery.status.ready", count=len(records)))
-            self._populate_placeholder(records)
+        pinned_records = _pinned_records_from_payload(payload)
+        pending_records = [*records, *pinned_records]
+        if pending_records:
+            self._status_label.setText(
+                tr("recovery.status.ready", count=len(pending_records))
+            )
+            self._populate_placeholder(pending_records)
         else:
             self._status_label.setText(tr("recovery.status.none"))
             self._populate_results()
+        self._sync_unpin_pinned_button()
+
+    def _sync_unpin_pinned_button(self) -> None:
+        payload = self._crash_manager.recovery_store.load()
+        pinned_records = _pinned_records_from_payload(payload)
+        self._unpin_pinned_button.setVisible(bool(pinned_records))
+        self._unpin_pinned_button.setEnabled(
+            bool(pinned_records) and self._unpin_pinned_record is not None and not self._running
+        )
 
     def _populate_placeholder(self, records: list[Mapping[str, Any]]) -> None:
         self._clear_layout(self._results_layout)
@@ -221,6 +280,13 @@ class RecoveryDialog(QDialog):
     def _populate_results(self) -> None:
         self._clear_layout(self._results_layout)
         if not self._result.items:
+            pinned_records = _pinned_records_from_payload(self._crash_manager.recovery_store.load())
+            if pinned_records:
+                self._status_label.setText(
+                    tr("recovery.status.pinned_ready", count=len(pinned_records))
+                )
+                self._populate_placeholder(pinned_records)
+                return
             empty_label = QLabel(tr("recovery.no_windows"))
             empty_label.setObjectName("EmptyState")
             empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -321,6 +387,15 @@ def _records_from_payload(payload: Mapping[str, Any] | None) -> list[Mapping[str
     if payload is None:
         return []
     records = payload.get("managed_windows", [])
+    if not isinstance(records, list):
+        return []
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _pinned_records_from_payload(payload: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    if payload is None:
+        return []
+    records = payload.get("pinned_windows", [])
     if not isinstance(records, list):
         return []
     return [record for record in records if isinstance(record, dict)]

@@ -15,7 +15,7 @@ ShelfyGAI uses a small layered architecture so the Windows-specific behavior is 
 
 ## Dependency Direction
 
-The UI depends on core use cases. The core depends only on protocols. Platform adapters implement those protocols. This keeps the shelf rules testable without requiring a live Windows desktop.
+The UI depends on core use cases. The core depends only on protocols. Platform adapters implement those protocols. This keeps the hidden-window rules testable without requiring a live Windows desktop.
 
 ```mermaid
 flowchart LR
@@ -36,14 +36,14 @@ flowchart LR
 2. `WindowsWindowGateway` enumerates top-level visible user windows and filters shell or internal windows.
 3. The user hides selected handles.
 4. `ShelfService` records the window metadata and asks the gateway to manage the handle.
-5. `WindowsWindowGateway` preserves the original extended style, removes `WS_EX_APPWINDOW`, adds `WS_EX_TOOLWINDOW`, and refreshes the frame with `SetWindowPos`.
-6. Restoring writes the original extended style back, refreshes the frame, and removes the window from the managed registry.
+5. `WindowsWindowGateway` preserves the original extended style, applies the selected hide options with `SetWindowLong`, and refreshes the frame with `SetWindowPos`.
+6. Restoring writes the original extended style back, refreshes the frame, and removes the window from the hidden-window registry.
 
-By default, `MainWindow.closeEvent` restores all managed windows before closing the app. While windows are managed, ShelfyGAI also writes `%APPDATA%\ShelfyGAI\recovery.json` with the original extended styles. Fatal exception handling and the next launch both use that emergency state to restore still-live windows when possible.
+By default, `MainWindow.closeEvent` restores all hidden windows before closing the app. While windows are hidden, ShelfyGAI also writes `%APPDATA%\ShelfyGAI\recovery.json` with the original extended styles. Fatal exception handling and the next launch both use that emergency state to restore still-live windows when possible.
 
 ## Groups
 
-`ShelfService` owns group metadata and managed-window group assignment. The UI persists groups, the selected group, and last-known managed-window metadata through `SettingsManager`. Saved HWND metadata includes a boot identifier, and settings normalization drops records from earlier boots so stale handles are never restored after a restart.
+`ShelfService` owns group metadata and hidden-window group assignment. The UI persists groups, the selected group, and last-known hidden-window metadata through `SettingsManager`. Saved HWND metadata includes a boot identifier, and settings normalization drops records from earlier boots so stale handles are never restored after a restart.
 
 ## System Tray And Hotkeys
 

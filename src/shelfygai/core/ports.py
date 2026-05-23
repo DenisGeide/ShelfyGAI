@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from shelfygai.core.models import WindowInfo
+from shelfygai.core.models import HideOptions, WindowInfo
 
 
 class WindowGateway(Protocol):
@@ -13,11 +13,11 @@ class WindowGateway(Protocol):
     def get_window(self, handle: int) -> WindowInfo:
         """Return information for a single window handle."""
 
-    def hide_window(self, handle: int) -> None:
+    def hide_window(self, handle: int, options: HideOptions | None = None) -> None:
         """Remove a window from taskbar and Alt+Tab while keeping it running."""
 
     def restore_window(self, handle: int, *, focus: bool = True) -> None:
-        """Restore a managed window's original taskbar and Alt+Tab behavior."""
+        """Restore a hidden window's original taskbar and Alt+Tab behavior."""
 
     def pin_window(
         self,
@@ -29,7 +29,13 @@ class WindowGateway(Protocol):
         """Keep a window above normal windows and optionally remove minimize affordances."""
 
     def unpin_window(self, handle: int) -> None:
-        """Restore a pinned window's original topmost and style state."""
+        """Remove ShelfyGAI's runtime always-on-top intent."""
+
+    def apply_pinned_order(self, handles: Sequence[int]) -> Sequence[int]:
+        """Apply pinned topmost order from UI top to bottom and return call order."""
+
+    def pin_diagnostics_text(self, handle: int) -> str:
+        """Return debug diagnostics for pinning a window."""
 
     def set_prevent_minimize(self, handle: int, enabled: bool) -> None:
         """Toggle the pinned window's minimize-box protection."""
@@ -38,7 +44,7 @@ class WindowGateway(Protocol):
         """Return whether a live window is minimized."""
 
     def restore_minimized_window(self, handle: int) -> None:
-        """Restore a minimized window without changing shelf membership."""
+        """Restore a minimized window without changing hidden-window membership."""
 
     def bring_to_front(self, handle: int) -> None:
         """Try to activate a visible window."""

@@ -4,6 +4,7 @@ import logging
 from collections import OrderedDict, deque
 from collections.abc import Iterable
 from pathlib import Path
+from time import perf_counter
 
 from PySide6.QtCore import QFileInfo, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QPixmap
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QFileIconProvider, QStyle, QWidget
 
 from shelfygai.constants import resource_path
 from shelfygai.core.models import WindowInfo
+from shelfygai.performance import elapsed_ms, log_performance
 
 LOGGER = logging.getLogger(__name__)
 ICON_CACHE_LIMIT = 128
@@ -30,6 +32,11 @@ class AppIconProvider(QObject):
         self._pending_keys: set[str] = set()
         self._fallback_icon: QIcon | None = None
         self._folder_icon: QIcon | None = None
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._queued_loads = 0
+        self._loaded_icons = 0
+        self._failed_loads = 0
         self._load_timer = QTimer(self)
         self._load_timer.setTimerType(Qt.TimerType.CoarseTimer)
         self._load_timer.setInterval(ICON_LOAD_INTERVAL_MS)
@@ -44,8 +51,10 @@ class AppIconProvider(QObject):
             return self.fallback_icon()
         icon = self._cache.get(key)
         if icon is not None:
+            self._cache_hits += 1
             self._cache.move_to_end(key)
             return icon
+        self._cache_misses += 1
         if queue:
             self._queue_icon_load(key)
             return self.fallback_icon()
@@ -67,6 +76,12 @@ class AppIconProvider(QObject):
         return {
             "cached": len(self._cache),
             "pending": len(self._pending_keys),
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "queued": self._queued_loads,
+            "loaded": self._loaded_icons,
+            "failed": self._failed_loads,
+            "timer_active": int(self._load_timer.isActive()),
         }
 
     def pixmap(self, icon: QIcon, size: int, widget: QWidget | None = None) -> QPixmap:
@@ -101,6 +116,7 @@ class AppIconProvider(QObject):
             return
         self._pending.append(key)
         self._pending_keys.add(key)
+        self._queued_loads += 1
         if not self._load_timer.isActive():
             self._load_timer.start()
 
@@ -111,7 +127,17 @@ class AppIconProvider(QObject):
 
         key = self._pending.popleft()
         self._pending_keys.discard(key)
-        self._store_icon(key, self._extract_icon(key))
+        started = perf_counter()
+        icon = self._extract_icon(key)
+        self._store_icon(key, icon)
+        self._loaded_icons += 1
+        log_performance(
+            "icon.load",
+            elapsed_ms=elapsed_ms(started),
+            level=logging.DEBUG,
+            cached=len(self._cache),
+            pending=len(self._pending_keys),
+        )
         self.iconLoaded.emit(key)
 
         if not self._pending:
@@ -127,13 +153,16 @@ class AppIconProvider(QObject):
         try:
             path = Path(executable_path)
             if not path.exists() or not path.is_file():
+                self._failed_loads += 1
                 return self.fallback_icon()
             icon = self._file_icon_provider.icon(QFileInfo(str(path)))
             if not icon.isNull():
                 return icon
         except OSError:
+            self._failed_loads += 1
             LOGGER.debug("Could not inspect executable icon path: %s", executable_path)
         except Exception:
+            self._failed_loads += 1
             LOGGER.debug("Could not extract executable icon: %s", executable_path, exc_info=True)
         return self.fallback_icon()
 

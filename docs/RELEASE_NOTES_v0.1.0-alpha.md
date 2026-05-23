@@ -3,14 +3,14 @@
 ## English
 
 ShelfyGAI v0.1.0-alpha is the first public alpha of a simple Windows window
-organizer. It helps users move selected windows to a Shelf, reduce taskbar and
+organizer. It helps users hide selected windows, reduce taskbar and
 Alt+Tab clutter, pin important windows above others, and restore everything
 safely.
 
 ### Highlights
 
-- Move windows to Shelf.
-- Restore shelved windows.
+- Hide windows.
+- Restore hidden windows.
 - Pin and unpin windows.
 - Organize windows with groups.
 - Optionally show a ShelfyGAI-owned group window as one taskbar item.
@@ -53,14 +53,14 @@ Please report bugs through GitHub Issues. Helpful reports include:
 ## Русский
 
 ShelfyGAI v0.1.0-alpha - первая публичная alpha-версия простой утилиты для
-организации окон в Windows. Она помогает переносить выбранные окна на Полку,
+организации окон в Windows. Она помогает скрывать выбранные окна,
 уменьшать clutter на панели задач и в Alt+Tab, закреплять важные окна поверх
 остальных и безопасно возвращать окна обратно.
 
 ### Главное
 
-- Перемещение окон на Полку.
-- Возврат окон с Полки.
+- Скрытие окон.
+- Возврат скрытых окон.
 - Закрепление и открепление окон.
 - Организация окон через группы.
 - Необязательное окно группы ShelfyGAI как один элемент панели задач.

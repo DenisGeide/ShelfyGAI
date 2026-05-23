@@ -13,7 +13,7 @@ first feedback round.
 | `01-current-main-ui.png` | Current main UI showing visual density and unclear first-time workflow. |
 | `02-current-pinned-list.png` | Current pinned windows list showing ordering and pin behavior concerns. |
 | `03-current-tray-overflow.png` | Windows tray overflow showing why tray visibility needs clear limitations. |
-| `04-current-taskbar.png` | Windows taskbar showing clutter and the need for clear shelf/group behavior. |
+| `04-current-taskbar.png` | Windows taskbar showing clutter and the need for clear hidden-window/group behavior. |
 | `05-current-installer-files.png` | Installer folder/files showing why the user-facing installer path must be simple. |
 | `06-current-groups-sidebar.png` | Current groups sidebar showing unclear icon-only group actions. |
 

@@ -10,7 +10,7 @@ Please follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) in all project spaces.
 - Do not add telemetry, analytics, advertising SDKs, cloud sync, or surprise background services.
 - Prefer small, testable changes.
 - Keep Windows integration isolated behind core protocols.
-- Restore hidden windows safely when changing shelf behavior.
+- Restore hidden windows safely when changing hidden-window behavior.
 - Treat user window titles, process names, paths, settings, and logs as private local data.
 
 ## Development Setup

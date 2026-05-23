@@ -15,6 +15,17 @@ from shelfygai.i18n import default_language
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_GROUP = {"id": DEFAULT_GROUP_ID, "name": "Ungrouped", "sort_order": 0}
+OVERLAY_MARKER_DEFAULTS = {
+    "marker_width": 10,
+    "marker_height": 88,
+    "opacity": 0.95,
+    "corner_radius": 6,
+    "hover_delay_ms": 1200,
+    "locked_position": False,
+    "hide_during_fullscreen": True,
+    "show_quick_controls": True,
+}
+OVERLAY_POSITION_EDGES = {"bottom", "top", "left", "right"}
 HOTKEY_QUICK_HIDE = "quick_hide"
 HOTKEY_RESTORE_LAST = "restore_last"
 HOTKEY_TOGGLE_VISIBILITY = "toggle_visibility"
@@ -50,6 +61,9 @@ class AppSettings:
     allow_pin_shelfygai_window: bool = False
     selected_group_id: str = DEFAULT_GROUP_ID
     window_groups: list[dict[str, Any]] = field(default_factory=lambda: [DEFAULT_GROUP.copy()])
+    overlay_groups_enabled: bool = False
+    selected_overlay_group_id: str = ""
+    overlay_groups: list[dict[str, Any]] = field(default_factory=list)
     managed_windows: list[dict[str, Any]] = field(default_factory=list)
     global_hotkeys: dict[str, dict[str, Any]] = field(
         default_factory=lambda: _copy_hotkey_defaults()
@@ -178,9 +192,15 @@ def _normalize_settings(settings: AppSettings) -> AppSettings:
     if not _is_hex_color(settings.accent_color):
         settings.accent_color = "#2f81f7"
     settings.window_groups = _normalize_groups(settings.window_groups)
+    settings.overlay_groups = _normalize_overlay_groups(settings.overlay_groups)
     group_ids = {group["id"] for group in settings.window_groups}
     if settings.selected_group_id not in group_ids:
         settings.selected_group_id = DEFAULT_GROUP_ID
+    overlay_group_ids = {group["id"] for group in settings.overlay_groups}
+    if settings.selected_overlay_group_id not in overlay_group_ids:
+        settings.selected_overlay_group_id = (
+            settings.overlay_groups[0]["id"] if settings.overlay_groups else ""
+        )
     settings.managed_windows = _normalize_managed_windows(settings.managed_windows, group_ids)
     settings.global_hotkeys = _normalize_hotkeys(settings.global_hotkeys)
     settings.pinned_watcher_interval_ms = _clamp_int(
@@ -256,6 +276,116 @@ def _normalize_groups(groups: list[Any]) -> list[dict[str, Any]]:
     )
 
 
+def _normalize_overlay_groups(groups: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for raw_group in groups:
+        if not isinstance(raw_group, dict):
+            continue
+        group_id = raw_group.get("id")
+        name = raw_group.get("name")
+        if not isinstance(group_id, str) or not group_id.strip():
+            continue
+        if not isinstance(name, str) or not name.strip():
+            continue
+        group_id = group_id.strip()
+        if group_id in seen:
+            continue
+        seen.add(group_id)
+        normalized.append(
+            {
+                "id": group_id,
+                "name": name.strip(),
+                "color": _normalize_color(raw_group.get("color"), "#2f81f7"),
+                "marker_width": _clamp_int(
+                    raw_group.get("marker_width"),
+                    minimum=4,
+                    maximum=64,
+                    default=OVERLAY_MARKER_DEFAULTS["marker_width"],
+                ),
+                "marker_height": _clamp_int(
+                    raw_group.get("marker_height"),
+                    minimum=24,
+                    maximum=256,
+                    default=OVERLAY_MARKER_DEFAULTS["marker_height"],
+                ),
+                "opacity": _clamp_float(
+                    raw_group.get("opacity"),
+                    minimum=0.2,
+                    maximum=1.0,
+                    default=OVERLAY_MARKER_DEFAULTS["opacity"],
+                ),
+                "corner_radius": _clamp_int(
+                    raw_group.get("corner_radius"),
+                    minimum=0,
+                    maximum=32,
+                    default=OVERLAY_MARKER_DEFAULTS["corner_radius"],
+                ),
+                "hover_delay_ms": _clamp_int(
+                    raw_group.get("hover_delay_ms"),
+                    minimum=0,
+                    maximum=5_000,
+                    default=OVERLAY_MARKER_DEFAULTS["hover_delay_ms"],
+                ),
+                "locked_position": _normalize_bool(
+                    raw_group.get("locked_position"),
+                    OVERLAY_MARKER_DEFAULTS["locked_position"],
+                ),
+                "hide_during_fullscreen": _normalize_bool(
+                    raw_group.get("hide_during_fullscreen"),
+                    OVERLAY_MARKER_DEFAULTS["hide_during_fullscreen"],
+                ),
+                "show_quick_controls": _normalize_bool(
+                    raw_group.get("show_quick_controls"),
+                    OVERLAY_MARKER_DEFAULTS["show_quick_controls"],
+                ),
+                "position_by_monitor": _normalize_overlay_positions(
+                    raw_group.get("position_by_monitor")
+                ),
+                "assigned_window_ids": _normalize_overlay_window_ids(
+                    raw_group.get("assigned_window_ids")
+                ),
+            }
+        )
+
+    return sorted(normalized, key=lambda group: group["name"].lower())
+
+
+def _normalize_overlay_positions(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for monitor_id, raw_position in value.items():
+        if not isinstance(monitor_id, str) or not monitor_id.strip():
+            continue
+        if not isinstance(raw_position, dict):
+            continue
+        x = raw_position.get("x")
+        y = raw_position.get("y")
+        edge = raw_position.get("edge", "bottom")
+        if not isinstance(x, int) or isinstance(x, bool):
+            continue
+        if not isinstance(y, int) or isinstance(y, bool):
+            continue
+        if edge not in OVERLAY_POSITION_EDGES:
+            edge = "bottom"
+        normalized[monitor_id.strip()] = {"x": x, "y": y, "edge": edge}
+    return normalized
+
+
+def _normalize_overlay_window_ids(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[int] = []
+    for handle in value:
+        if not isinstance(handle, int) or isinstance(handle, bool) or handle <= 0:
+            continue
+        if handle not in normalized:
+            normalized.append(handle)
+    return normalized
+
+
 def _normalize_managed_windows(
     windows: list[Any],
     group_ids: set[str],
@@ -311,16 +441,30 @@ def _changed_fields(before: AppSettings, after: AppSettings) -> list[str]:
     ]
 
 
+def _normalize_bool(value: Any, default: bool) -> bool:
+    return value if isinstance(value, bool) else default
+
+
+def _normalize_color(value: Any, default: str) -> str:
+    return value if isinstance(value, str) and _is_hex_color(value) else default
+
+
 def _is_hex_color(value: str) -> bool:
     if not isinstance(value, str) or len(value) != 7 or not value.startswith("#"):
         return False
     return all(character in "0123456789abcdefABCDEF" for character in value[1:])
 
 
-def _clamp_int(value: int, *, minimum: int, maximum: int, default: int) -> int:
+def _clamp_int(value: Any, *, minimum: int, maximum: int, default: int) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         return default
     return max(minimum, min(value, maximum))
+
+
+def _clamp_float(value: Any, *, minimum: float, maximum: float, default: float) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return default
+    return max(minimum, min(float(value), maximum))
 
 
 def _copy_settings(settings: AppSettings) -> AppSettings:

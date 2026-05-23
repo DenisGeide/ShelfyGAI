@@ -4,7 +4,7 @@ ShelfyGAI is local-only.
 
 ## What Is Stored
 
-ShelfyGAI stores local settings such as window geometry, safety preferences, groups, and current-boot managed-window metadata in:
+ShelfyGAI stores local settings such as window geometry, safety preferences, groups, and current-boot hidden-window metadata in:
 
 ```text
 %APPDATA%\ShelfyGAI\settings.json
@@ -28,7 +28,7 @@ Emergency recovery state is stored locally in:
 %APPDATA%\ShelfyGAI\recovery.json
 ```
 
-Logs are local diagnostic files. They may include app lifecycle events, settings field names that changed, exception traces, and window operation handles. Emergency recovery state and crash diagnostics may include window titles, process names, process ids, executable paths, and HWND values so ShelfyGAI can restore managed windows after an unexpected failure.
+Logs are local diagnostic files. They may include app lifecycle events, settings field names that changed, exception traces, and window operation handles. Emergency recovery state and crash diagnostics may include window titles, process names, process ids, executable paths, and HWND values so ShelfyGAI can restore hidden windows after an unexpected failure.
 
 ## What Is Not Collected
 

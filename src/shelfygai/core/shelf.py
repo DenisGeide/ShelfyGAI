@@ -6,8 +6,15 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from shelfygai.core.errors import GroupOperationError, WindowNotFoundError
-from shelfygai.core.models import DEFAULT_GROUP_ID, PinnedItem, ShelfItem, WindowGroup, WindowInfo
+from shelfygai.core.errors import GroupOperationError, WindowNotFoundError, WindowOperationError
+from shelfygai.core.models import (
+    DEFAULT_GROUP_ID,
+    HideOptions,
+    PinnedItem,
+    ShelfItem,
+    WindowGroup,
+    WindowInfo,
+)
 from shelfygai.core.ports import WindowGateway
 from shelfygai.i18n import tr
 
@@ -43,7 +50,15 @@ class ShelfService:
     def pinned_items(self) -> Sequence[PinnedItem]:
         return sorted(self._pinned_items.values(), key=lambda item: item.pinned_at)
 
-    def shelve(self, handle: int, group_id: str = DEFAULT_GROUP_ID) -> ShelfItem:
+    def shelve(
+        self,
+        handle: int,
+        group_id: str = DEFAULT_GROUP_ID,
+        hide_options: HideOptions | None = None,
+    ) -> ShelfItem:
+        if handle in self._pinned_items:
+            LOGGER.info("Refusing to hide pinned window: handle=%s", handle)
+            raise WindowOperationError(tr("error.hide_pinned_window"))
         if handle in self._items:
             LOGGER.debug("Window already managed: handle=%s", handle)
             return self._items[handle]
@@ -52,7 +67,7 @@ class ShelfService:
 
         window = self._window_gateway.get_window(handle)
         LOGGER.info("Managing window: handle=%s", window.handle)
-        self._window_gateway.hide_window(handle)
+        self._window_gateway.hide_window(handle, hide_options)
         item = ShelfItem(window=window, hidden_at=self._clock(), group_id=group_id)
         self._items[handle] = item
         return item
@@ -122,6 +137,18 @@ class ShelfService:
                 skipped += 1
         return unpinned, skipped
 
+    def pin_diagnostics(self, handle: int) -> str:
+        LOGGER.info("Collecting pin diagnostics: handle=%s", handle)
+        return self._window_gateway.pin_diagnostics_text(handle)
+
+    def apply_pinned_order(self, handles: Sequence[int]) -> Sequence[int]:
+        self.prune_missing()
+        pinned_handles = [handle for handle in handles if handle in self._pinned_items]
+        LOGGER.info("Applying pinned order: top_to_bottom=%s", pinned_handles)
+        applied = self._window_gateway.apply_pinned_order(pinned_handles)
+        self.prune_missing()
+        return applied
+
     def set_prevent_minimize(self, handle: int, enabled: bool) -> bool:
         item = self._pinned_items.get(handle)
         if item is None:
@@ -147,15 +174,19 @@ class ShelfService:
         )
         return True
 
-    def shelve_foreground(self, group_id: str = DEFAULT_GROUP_ID) -> ShelfItem:
+    def shelve_foreground(
+        self,
+        group_id: str = DEFAULT_GROUP_ID,
+        hide_options: HideOptions | None = None,
+    ) -> ShelfItem:
         handle = self._window_gateway.foreground_window_handle()
         if handle is None:
             raise WindowNotFoundError(tr("error.foreground_not_manageable"))
-        return self.shelve(handle, group_id=group_id)
+        return self.shelve(handle, group_id=group_id, hide_options=hide_options)
 
     def restore(self, handle: int, *, focus: bool = True) -> bool:
         if handle not in self._items:
-            LOGGER.info("Ignoring restore request for unmanaged window: handle=%s", handle)
+            LOGGER.info("Ignoring restore request for unknown hidden window: handle=%s", handle)
             return False
 
         item = self._items[handle]
@@ -164,7 +195,7 @@ class ShelfService:
             self._items.pop(handle, None)
             return False
 
-        LOGGER.info("Restoring managed window: handle=%s", item.window.handle)
+        LOGGER.info("Restoring hidden window: handle=%s", item.window.handle)
         try:
             self._window_gateway.restore_window(handle, focus=focus)
         except WindowNotFoundError:
@@ -176,7 +207,7 @@ class ShelfService:
 
     def restore_last(self, *, focus: bool = True) -> bool:
         if not self._items:
-            LOGGER.info("Ignoring restore-last request with no managed windows")
+            LOGGER.info("Ignoring restore-last request with no hidden windows")
             return False
         last_item = max(self._items.values(), key=lambda item: item.hidden_at)
         return self.restore(last_item.window.handle, focus=focus)
@@ -187,7 +218,7 @@ class ShelfService:
         for handle in list(self._items):
             item = self._items[handle]
             LOGGER.info(
-                "Restoring managed window during restore-all: handle=%s",
+                "Restoring hidden window during restore-all: handle=%s",
                 item.window.handle,
             )
             try:
@@ -196,7 +227,7 @@ class ShelfService:
                 else:
                     skipped += 1
             except Exception:
-                LOGGER.exception("Could not restore managed window: handle=%s", handle)
+                LOGGER.exception("Could not restore hidden window: handle=%s", handle)
                 skipped += 1
                 continue
         return restored, skipped
@@ -209,7 +240,7 @@ class ShelfService:
         missing_count = 0
         for handle in list(self._items):
             if not self._window_gateway.is_window_available(handle):
-                LOGGER.info("Pruning missing managed window: handle=%s", handle)
+                LOGGER.info("Pruning missing hidden window: handle=%s", handle)
                 self._items.pop(handle, None)
                 missing_count += 1
         for handle in list(self._pinned_items):
@@ -244,6 +275,9 @@ class ShelfService:
 
     def has_pinned_windows(self) -> bool:
         return bool(self._pinned_items)
+
+    def has_prevent_minimize_pinned_windows(self) -> bool:
+        return any(item.prevent_minimize for item in self._pinned_items.values())
 
     def managed_style_snapshot(self) -> dict[int, Any]:
         snapshotter = getattr(self._window_gateway, "managed_styles_snapshot", None)
@@ -303,7 +337,7 @@ class ShelfService:
 
     def assign_to_group(self, handle: int, group_id: str) -> bool:
         if handle not in self._items:
-            LOGGER.info("Ignoring group assignment for unmanaged window: handle=%s", handle)
+            LOGGER.info("Ignoring group assignment for unknown hidden window: handle=%s", handle)
             return False
         if group_id not in self._groups:
             raise GroupOperationError(tr("error.group_missing"))
@@ -315,7 +349,7 @@ class ShelfService:
             hidden_at=item.hidden_at,
             group_id=group_id,
         )
-        LOGGER.info("Assigned managed window to group: handle=%s group_id=%s", handle, group_id)
+        LOGGER.info("Assigned hidden window to group: handle=%s group_id=%s", handle, group_id)
         return True
 
 

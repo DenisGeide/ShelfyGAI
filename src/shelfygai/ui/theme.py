@@ -174,19 +174,22 @@ def apply_theme(
         }}
         QPushButton#SidebarButton {{
             background: transparent;
-            border: 1px solid transparent;
+            border: none;
+            border-left: 3px solid transparent;
             border-radius: 8px;
             text-align: left;
-            padding: 10px 12px;
-            min-height: 24px;
+            padding: 10px 12px 10px 14px;
+            min-height: 26px;
+            font-weight: 500;
         }}
         QPushButton#SidebarButton:hover {{
             background: {colors.surface_alt};
-            border-color: {colors.border};
+            border-left-color: {colors.border};
         }}
         QPushButton#SidebarButton[active="true"] {{
             background: {colors.button};
-            border-color: {accent};
+            border-left-color: {accent};
+            font-weight: 650;
         }}
         QPushButton#GroupButton {{
             background: transparent;
@@ -327,6 +330,10 @@ def apply_theme(
         }}
         QTableWidget::item:hover {{
             background: {colors.button_hover};
+        }}
+        QTableWidget::item:selected {{
+            background: {accent};
+            color: #ffffff;
         }}
         QTableWidget::item:selected:hover {{
             background: {accent_pressed};

@@ -13,7 +13,7 @@ Versioning after the first stable release.
 
 ### Added
 
-- Shelf workflow.
+- Hidden windows workflow.
 - Pin/unpin windows.
 - Window groups.
 - Optional group taskbar windows.
@@ -26,7 +26,7 @@ Versioning after the first stable release.
 ### Changed
 
 - Simplified main UI.
-- Renamed Managed windows to Shelf.
+- Updated user-facing hidden-window wording across the app.
 - Reworked group UI.
 - Reworked pin behavior to be reversible and safe.
 - Simplified installer strategy.

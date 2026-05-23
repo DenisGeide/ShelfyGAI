@@ -22,6 +22,16 @@ def _record(handle: int = 100) -> dict[str, object]:
     }
 
 
+def _pinned_record(handle: int = 300) -> dict[str, object]:
+    return {
+        "boot_id": current_boot_id(),
+        "handle": handle,
+        "title": "Pinned",
+        "process_id": 43,
+        "process_name": "pinned.exe",
+    }
+
+
 def test_emergency_recovery_store_round_trip(tmp_path) -> None:
     path = tmp_path / "recovery.json"
     store = EmergencyRecoveryStore(path)
@@ -43,6 +53,17 @@ def test_emergency_recovery_store_filters_invalid_records(tmp_path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert len(payload["managed_windows"]) == 1
     assert payload["managed_windows"][0]["handle"] == 100
+
+
+def test_emergency_recovery_store_keeps_pinned_records(tmp_path) -> None:
+    path = tmp_path / "recovery.json"
+    store = EmergencyRecoveryStore(path)
+
+    assert store.save([], pinned_records=[_pinned_record()], reason="window pinned") is True
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["managed_windows"] == []
+    assert payload["pinned_windows"][0]["handle"] == 300
 
 
 def test_emergency_recovery_store_ignores_corrupted_json(tmp_path) -> None:
@@ -74,6 +95,42 @@ def test_recover_previous_session_restores_and_clears_state(tmp_path) -> None:
 
     assert result.as_dict() == {"attempted": 2, "restored": 2, "failed": 0, "skipped": 0}
     assert restored_handles == [100, 200]
+    assert not path.exists()
+
+
+def test_recover_previous_session_keeps_pending_pinned_records(tmp_path) -> None:
+    path = tmp_path / "recovery.json"
+    store = EmergencyRecoveryStore(path)
+    store.save([_record(100)], pinned_records=[_pinned_record()], reason="fatal crash")
+    manager = CrashManager(
+        recovery_store=store,
+        reporter=CrashReporter(tmp_path / "crashes"),
+    )
+
+    result = manager.recover_previous_session_detailed(lambda _record: True)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert result.restored == 1
+    assert payload["managed_windows"] == []
+    assert payload["pinned_windows"][0]["handle"] == 300
+
+
+def test_recover_previous_pinned_unpins_and_clears_state(tmp_path) -> None:
+    path = tmp_path / "recovery.json"
+    store = EmergencyRecoveryStore(path)
+    store.save([], pinned_records=[_pinned_record()], reason="fatal crash")
+    manager = CrashManager(
+        recovery_store=store,
+        reporter=CrashReporter(tmp_path / "crashes"),
+    )
+    unpinned_handles: list[int] = []
+
+    result = manager.recover_previous_pinned_detailed(
+        lambda record: unpinned_handles.append(int(record["handle"])) is None or True
+    )
+
+    assert result.restored == 1
+    assert unpinned_handles == [300]
     assert not path.exists()
 
 

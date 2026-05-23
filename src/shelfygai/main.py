@@ -141,7 +141,11 @@ def _show_recovery_screen_if_needed(
         from shelfygai.ui.recovery_dialog import RecoveryDialog
 
         gateway = WindowsWindowGateway()
-        dialog = RecoveryDialog(crash_manager, gateway.restore_from_recovery_record)
+        dialog = RecoveryDialog(
+            crash_manager,
+            gateway.restore_from_recovery_record,
+            gateway.unpin_from_recovery_record,
+        )
         dialog.exec()
         result = dialog.result_data
     except Exception:

@@ -33,7 +33,7 @@ artifacts automatically during release preparation.
 - [ ] Launch app on Windows 10.
 - [ ] Launch app on Windows 11.
 - [ ] Hide and restore a normal application window.
-- [ ] Restore all managed windows.
+- [ ] Restore all hidden windows.
 - [ ] Close-to-tray and Quit behavior verified.
 - [ ] Startup entry add/remove verified under HKCU only.
 - [ ] Global hotkeys register and unregister cleanly.

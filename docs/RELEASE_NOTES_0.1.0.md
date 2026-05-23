@@ -6,15 +6,15 @@ locally on their own PC.
 
 ## What ShelfyGAI Does
 
-- Moves selected open application windows into an internal ShelfyGAI shelf.
-- Removes managed windows from the Windows taskbar and Alt+Tab without terminating or suspending the
+- Hides selected open application windows in a local Hidden windows list.
+- Hides windows from the Windows taskbar and Alt+Tab without terminating or suspending the
   application process.
-- Restores individual windows, restores the last hidden window, or restores all managed windows.
-- Organizes managed windows into local groups with sidebar counters and drag-and-drop assignment.
+- Restores individual windows, restores the last hidden window, or restores all hidden windows.
+- Organizes hidden windows into local groups with sidebar counters and drag-and-drop assignment.
 - Uses a modern dark PySide6 interface with search, quick actions, system tray support, app icons,
   and configurable hotkeys.
 - Stores settings and logs locally under the user's roaming AppData directory.
-- Captures local crash diagnostics and emergency recovery state to restore managed windows after
+- Captures local crash diagnostics and emergency recovery state to restore hidden windows after
   unexpected failures when possible.
 
 ## Windows 10/11 Support
@@ -27,7 +27,7 @@ locally on their own PC.
 
 ## Windows Integration
 
-- Uses WinAPI extended window styles to remove `WS_EX_APPWINDOW`, add `WS_EX_TOOLWINDOW`, and refresh the frame with `SetWindowPos`.
+- Uses WinAPI extended window styles to apply selected hide options and refresh the frame with `SetWindowPos`.
 - Preserves original extended styles for exact restore.
 - Enumerates top-level visible application windows while skipping shell, critical system, empty-title, tool, and ShelfyGAI windows.
 - Uses current-user HKCU Run startup integration without administrator rights.
@@ -42,7 +42,7 @@ ShelfyGAI has no telemetry, analytics, ads, cloud sync, or background service wi
 
 - ShelfyGAI refuses to manage its own windows, the Windows taskbar shell, Start Menu, and known
   critical system windows.
-- Original window styles are saved before a window is managed and restored when the window is
+- Original window styles are saved before a window is hidden and restored when the window is
   returned to the desktop.
 - Restore-on-exit and emergency recovery are designed to reduce the risk of leaving windows
   inaccessible after a crash or forced shutdown.
@@ -56,7 +56,7 @@ ShelfyGAI has no telemetry, analytics, ads, cloud sync, or background service wi
 - This is an alpha release and should be tested carefully before daily use.
 - Release artifacts may be unsigned, so Windows may warn before running the executable or installer.
 - Managing elevated applications may require running ShelfyGAI elevated, which is not recommended for normal use.
-- Force-killing ShelfyGAI cannot run immediate cleanup, but next-launch emergency recovery attempts to restore still-live managed windows from the same Windows boot.
+- Force-killing ShelfyGAI cannot run immediate cleanup, but next-launch emergency recovery attempts to restore still-live hidden windows from the same Windows boot.
 - The update check button is informational only in this release.
 - Some applications with custom shells, protected windows, or unusual window ownership may not appear
   in the open-window list or may not respond to taskbar style changes.

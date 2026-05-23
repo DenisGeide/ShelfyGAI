@@ -38,8 +38,8 @@ ffmpeg -i shelfygai-demo.mp4 -vf "fps=12,scale=1200:-1:flags=lanczos" shelfygai-
 
 - Search open windows, select one, and move it into ShelfyGAI.
 - Show the window disappearing from the taskbar organization flow.
-- Switch to Managed Windows and restore the window.
-- Create or select a group and show grouped managed cards.
+- Switch to Hidden windows and restore the window.
+- Create or select a group and show grouped hidden-window cards.
 - Open Settings and switch between English and Russian.
 - Open the tray menu and show Restore All Windows.
 

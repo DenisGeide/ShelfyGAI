@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import logging
 import os
 from collections.abc import Sequence
 from ctypes import wintypes
 from dataclasses import dataclass
 from time import perf_counter
+from typing import Any
 
 import psutil
 import win32con
@@ -14,7 +16,7 @@ import win32gui
 import win32process
 
 from shelfygai.core.errors import WindowNotFoundError, WindowOperationError
-from shelfygai.core.models import WindowInfo
+from shelfygai.core.models import HideOptions, WindowInfo
 from shelfygai.i18n import tr
 from shelfygai.performance import elapsed_ms, log_performance
 
@@ -70,6 +72,7 @@ TOPMOST_REFRESH_FLAGS = (
     | win32con.SWP_NOACTIVATE
     | win32con.SWP_FRAMECHANGED
 )
+PROCESS_INFO_CACHE_TTL_SECONDS = 5.0
 
 
 class TokenElevation(ctypes.Structure):
@@ -84,6 +87,7 @@ class ManagedWindowStyle:
     process_id: int
     process_name: str
     class_name: str
+    hide_options: HideOptions = HideOptions()
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +109,10 @@ class ProcessInfo:
     executable_path: str | None = None
 
 
+def _win32_error_code(exc: BaseException) -> int | None:
+    return getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+
+
 class WindowsWindowGateway:
     def __init__(self) -> None:
         self._own_process_id = os.getpid()
@@ -116,6 +124,8 @@ class WindowsWindowGateway:
         self._own_process_elevated = self._is_current_process_elevated()
         self._managed_styles: dict[int, ManagedWindowStyle] = {}
         self._pinned_styles: dict[int, PinnedWindowStyle] = {}
+        self._last_pin_diagnostics: dict[int, dict[str, Any]] = {}
+        self._process_info_cache: dict[int, tuple[float, ProcessInfo]] = {}
 
     def _configure_ctypes_signatures(self) -> None:
         self._kernel32.OpenProcess.argtypes = [
@@ -221,11 +231,27 @@ class WindowsWindowGateway:
             is_minimized=bool(win32gui.IsIconic(handle)),
         )
 
-    def hide_window(self, handle: int) -> None:
+    def hide_window(self, handle: int, options: HideOptions | None = None) -> None:
+        self.apply_hide_options(handle, options or HideOptions())
+
+    def apply_hide_options(self, handle: int, options: HideOptions) -> ManagedWindowStyle:
         self._ensure_window(handle)
         if handle in self._managed_styles:
             LOGGER.info("Window is already managed; skipping duplicate hide: handle=%s", handle)
-            return
+            return self._managed_styles[handle]
+
+        if not options.has_any_target:
+            LOGGER.warning("Hide requested without any selected targets: handle=%s", handle)
+            raise WindowOperationError(tr("error.hide_options_empty"))
+        if options.hide_tray:
+            LOGGER.warning(
+                "Tray hiding requested but unsupported by safe window style operations: "
+                "handle=%s options=%s",
+                handle,
+                options,
+            )
+            if not options.has_style_target:
+                raise WindowOperationError(tr("error.hide_tray_unsupported"))
 
         self._ensure_safe_to_manage(handle)
         window = self.get_window(handle)
@@ -233,19 +259,29 @@ class WindowsWindowGateway:
         original_style = self._get_extended_style(handle)
         # Do not use SW_HIDE here: preserving process/window state is the feature.
         # Taskbar and Alt+Tab membership is controlled by extended styles instead.
-        managed_style = (original_style & ~win32con.WS_EX_APPWINDOW) | win32con.WS_EX_TOOLWINDOW
+        managed_style = self._target_extended_style_for_options(original_style, options)
 
         LOGGER.info(
-            "Managing native window style: handle=%s original_ex_style=0x%08X "
-            "managed_ex_style=0x%08X class=%s",
+            "Applying hide options: handle=%s original_ex_style=0x%08X "
+            "requested_options=%s final_ex_style=0x%08X class=%s",
             handle,
             original_style,
+            options,
             managed_style,
             class_name,
         )
 
         try:
-            self._set_extended_style(handle, managed_style)
+            if managed_style != original_style:
+                self._set_extended_style(handle, managed_style)
+            else:
+                LOGGER.warning(
+                    "Hide options produced no extended-style change: handle=%s "
+                    "style=0x%08X options=%s",
+                    handle,
+                    original_style,
+                    options,
+                )
             self._verify_extended_style(handle, managed_style)
             self._refresh_window_frame(handle)
         except WindowOperationError:
@@ -256,20 +292,28 @@ class WindowsWindowGateway:
             self._rollback_style(handle, original_style)
             raise
 
-        self._managed_styles[handle] = ManagedWindowStyle(
+        managed_record = ManagedWindowStyle(
             handle=handle,
             original_extended_style=original_style,
             managed_extended_style=managed_style,
             process_id=window.process_id,
             process_name=window.process_name,
             class_name=class_name,
+            hide_options=options,
         )
+        self._managed_styles[handle] = managed_record
+        return managed_record
 
     def restore_window(self, handle: int, *, focus: bool = True) -> None:
+        self.restore_window_styles(handle)
+        if focus:
+            self.bring_to_front(handle)
+
+    def restore_window_styles(self, handle: int) -> None:
         self._ensure_window(handle)
         managed_style = self._managed_styles.get(handle)
         if managed_style is None:
-            LOGGER.warning("No original style registered for managed window: handle=%s", handle)
+            LOGGER.warning("No original style registered for hidden window: handle=%s", handle)
             raise WindowOperationError(tr("error.window_not_managed", handle=handle))
 
         LOGGER.info(
@@ -282,8 +326,6 @@ class WindowsWindowGateway:
         self._set_extended_style(handle, managed_style.original_extended_style)
         self._refresh_window_frame(handle)
         self._managed_styles.pop(handle, None)
-        if focus:
-            self.bring_to_front(handle)
 
     def pin_window(
         self,
@@ -296,6 +338,7 @@ class WindowsWindowGateway:
         if handle in self._pinned_styles:
             LOGGER.info("Window is already pinned; refreshing topmost state: handle=%s", handle)
             self._set_topmost(handle, enabled=True)
+            self._verify_topmost_intent(handle, enabled=True)
             if self._pinned_styles[handle].prevent_minimize != prevent_minimize:
                 self.set_prevent_minimize(handle, prevent_minimize)
             return
@@ -311,15 +354,17 @@ class WindowsWindowGateway:
             else original_style
         )
         pinned_extended_style = original_extended_style | win32con.WS_EX_TOPMOST
+        diagnostics = self._pin_diagnostics(handle, topmost_intent=True)
 
         LOGGER.info(
             "Pinning native window: handle=%s prevent_minimize=%s original_style=0x%08X "
-            "original_ex_style=0x%08X class=%s",
+            "original_ex_style=0x%08X class=%s diagnostics=%s",
             handle,
             prevent_minimize,
             original_style,
             original_extended_style,
             class_name,
+            diagnostics,
         )
 
         try:
@@ -327,6 +372,7 @@ class WindowsWindowGateway:
                 self._set_style(handle, target_style)
                 self._refresh_window_frame(handle)
             self._set_topmost(handle, enabled=True)
+            self._verify_topmost_intent(handle, enabled=True)
         except WindowOperationError:
             LOGGER.exception("Failed to pin window; attempting rollback: handle=%s", handle)
             self._rollback_pin(handle, original_style, original_extended_style)
@@ -353,22 +399,47 @@ class WindowsWindowGateway:
         if not self.is_window_available(handle):
             LOGGER.info("Dropping closed pinned window from style registry: handle=%s", handle)
             self._pinned_styles.pop(handle, None)
+            self._last_pin_diagnostics.pop(handle, None)
             return
 
         LOGGER.info(
             "Unpinning native window: handle=%s original_style=0x%08X "
-            "original_ex_style=0x%08X",
+            "original_ex_style=0x%08X diagnostics=%s",
             handle,
             pinned_style.original_style,
             pinned_style.original_extended_style,
+            self._pin_diagnostics(handle, topmost_intent=False),
         )
-        self._set_style(handle, pinned_style.original_style)
-        self._set_extended_style(handle, pinned_style.original_extended_style)
-        self._set_topmost(
-            handle,
-            enabled=bool(pinned_style.original_extended_style & win32con.WS_EX_TOPMOST),
-        )
+        if pinned_style.prevent_minimize:
+            self._set_style(handle, pinned_style.original_style)
+            self._refresh_window_frame(handle)
+        self._set_topmost(handle, enabled=False)
+        self._verify_topmost_intent(handle, enabled=False)
         self._pinned_styles.pop(handle, None)
+
+    def apply_pinned_order(self, handles: Sequence[int]) -> Sequence[int]:
+        """Apply topmost z-order for pinned windows from UI top to bottom."""
+        requested = [handle for handle in handles if handle in self._pinned_styles]
+        for handle in list(self._pinned_styles):
+            if not self.is_window_available(handle):
+                LOGGER.info("Dropping closed pinned window before z-order apply: %s", handle)
+                self._pinned_styles.pop(handle, None)
+                self._last_pin_diagnostics.pop(handle, None)
+
+        live_handles = [
+            handle
+            for handle in requested
+            if handle in self._pinned_styles and self.is_window_available(handle)
+        ]
+        applied: list[int] = []
+        for handle in reversed(live_handles):
+            try:
+                LOGGER.info("Applying pinned z-order: handle=%s", handle)
+                self._set_topmost(handle, enabled=True)
+                applied.append(handle)
+            except WindowOperationError:
+                LOGGER.exception("Could not apply pinned z-order: handle=%s", handle)
+        return tuple(applied)
 
     def set_prevent_minimize(self, handle: int, enabled: bool) -> None:
         self._ensure_window(handle)
@@ -435,7 +506,7 @@ class WindowsWindowGateway:
         except win32gui.error:
             return False
         if not available and handle in self._managed_styles:
-            LOGGER.info("Dropping closed managed window from style registry: handle=%s", handle)
+            LOGGER.info("Dropping closed hidden window from style registry: handle=%s", handle)
             self._managed_styles.pop(handle, None)
         if not available and handle in self._pinned_styles:
             LOGGER.info("Dropping closed pinned window from style registry: handle=%s", handle)
@@ -450,6 +521,10 @@ class WindowsWindowGateway:
 
     def pinned_styles_snapshot(self) -> dict[int, PinnedWindowStyle]:
         return dict(self._pinned_styles)
+
+    def pin_diagnostics_text(self, handle: int) -> str:
+        diagnostics = self._pin_diagnostics(handle, topmost_intent=handle in self._pinned_styles)
+        return json.dumps(diagnostics, indent=2, sort_keys=True)
 
     def restore_from_recovery_record(self, record: dict[str, object]) -> bool:
         handle = record.get("handle")
@@ -493,6 +568,45 @@ class WindowsWindowGateway:
             return True
         except WindowOperationError:
             LOGGER.exception("Could not restore emergency recovery target: handle=%s", handle)
+            return False
+
+    def unpin_from_recovery_record(self, record: dict[str, object]) -> bool:
+        handle = record.get("handle")
+        process_id = record.get("process_id")
+        if not (isinstance(handle, int) and isinstance(process_id, int)):
+            LOGGER.warning("Ignoring invalid pinned recovery record: %s", record)
+            return False
+        if not self.is_window_available(handle):
+            LOGGER.info("Pinned recovery target is no longer available: handle=%s", handle)
+            return False
+
+        try:
+            _thread_id, live_process_id = win32process.GetWindowThreadProcessId(handle)
+        except win32gui.error:
+            LOGGER.info("Pinned recovery target disappeared: handle=%s", handle)
+            return False
+        if live_process_id != process_id:
+            LOGGER.warning(
+                "Pinned recovery handle belongs to a different process: "
+                "handle=%s expected_pid=%s live_pid=%s",
+                handle,
+                process_id,
+                live_process_id,
+            )
+            return False
+
+        try:
+            LOGGER.warning(
+                "Unpinning window from remembered crash metadata: handle=%s pid=%s",
+                handle,
+                process_id,
+            )
+            self._set_topmost(handle, enabled=False)
+            self._verify_topmost_intent(handle, enabled=False)
+            self._pinned_styles.pop(handle, None)
+            return True
+        except WindowOperationError:
+            LOGGER.exception("Could not unpin remembered window: handle=%s", handle)
             return False
 
     def foreground_window_handle(self) -> int | None:
@@ -576,6 +690,28 @@ class WindowsWindowGateway:
         if owner and not (extended_style & win32con.WS_EX_APPWINDOW):
             LOGGER.warning("Refusing to manage owned non-app window: handle=%s", handle)
             raise WindowOperationError(tr("error.window_owned"))
+
+    def _target_extended_style_for_options(
+        self,
+        original_style: int,
+        options: HideOptions,
+    ) -> int:
+        if options.hide_taskbar and options.hide_alt_tab:
+            return (original_style & ~win32con.WS_EX_APPWINDOW) | win32con.WS_EX_TOOLWINDOW
+        if options.hide_taskbar:
+            LOGGER.warning(
+                "Taskbar-only hiding requested. This avoids WS_EX_TOOLWINDOW so Alt+Tab "
+                "visibility is preserved, but Windows may keep some app windows on the taskbar."
+            )
+            return original_style & ~win32con.WS_EX_APPWINDOW
+        if options.hide_alt_tab:
+            LOGGER.warning(
+                "Alt+Tab-only hiding requested. Windows does not expose a fully reliable "
+                "Alt+Tab-only extended style; ShelfyGAI will force WS_EX_APPWINDOW while "
+                "using WS_EX_TOOLWINDOW as a best effort."
+            )
+            return original_style | win32con.WS_EX_APPWINDOW | win32con.WS_EX_TOOLWINDOW
+        return original_style
 
     def _ensure_safe_to_pin(self, handle: int, *, allow_own_window: bool) -> None:
         window = self.get_window(handle)
@@ -682,6 +818,13 @@ class WindowsWindowGateway:
     ) -> ProcessInfo:
         if process_cache is not None and process_id in process_cache:
             return process_cache[process_id]
+        now = perf_counter()
+        cached = self._process_info_cache.get(process_id)
+        if cached is not None and now - cached[0] <= PROCESS_INFO_CACHE_TTL_SECONDS:
+            process_info = cached[1]
+            if process_cache is not None:
+                process_cache[process_id] = process_info
+            return process_info
 
         process_name = "unknown.exe"
         executable_path: str | None = None
@@ -698,9 +841,20 @@ class WindowsWindowGateway:
             process_name=process_name,
             executable_path=executable_path,
         )
+        self._process_info_cache[process_id] = (now, process_info)
+        self._prune_process_info_cache(now)
         if process_cache is not None:
             process_cache[process_id] = process_info
         return process_info
+
+    def _prune_process_info_cache(self, now: float) -> None:
+        stale_process_ids = [
+            process_id
+            for process_id, (cached_at, _info) in self._process_info_cache.items()
+            if now - cached_at > PROCESS_INFO_CACHE_TTL_SECONDS
+        ]
+        for process_id in stale_process_ids:
+            self._process_info_cache.pop(process_id, None)
 
     def _get_extended_style(self, handle: int) -> int:
         try:
@@ -724,10 +878,16 @@ class WindowsWindowGateway:
         try:
             previous_style = win32gui.SetWindowLong(handle, win32con.GWL_EXSTYLE, style)
         except win32gui.error as exc:
-            LOGGER.exception("SetWindowLong failed: handle=%s style=0x%08X", handle, style)
+            LOGGER.exception(
+                "SetWindowLong failed: handle=%s style=0x%08X error=%s get_last_error=%s",
+                handle,
+                style,
+                _win32_error_code(exc),
+                ctypes.get_last_error(),
+            )
             raise WindowOperationError(tr("error.window_style_update", handle=handle)) from exc
-        LOGGER.debug(
-            "SetWindowLong GWL_EXSTYLE: handle=%s previous=0x%08X new=0x%08X",
+        LOGGER.info(
+            "SetWindowLong GWL_EXSTYLE result: handle=%s previous=0x%08X new=0x%08X",
             handle,
             previous_style,
             style,
@@ -765,24 +925,128 @@ class WindowsWindowGateway:
 
     def _refresh_window_frame(self, handle: int) -> None:
         try:
-            win32gui.SetWindowPos(handle, 0, 0, 0, 0, 0, STYLE_REFRESH_FLAGS)
+            result = win32gui.SetWindowPos(handle, 0, 0, 0, 0, 0, STYLE_REFRESH_FLAGS)
         except win32gui.error as exc:
-            LOGGER.exception("SetWindowPos frame refresh failed: handle=%s", handle)
+            LOGGER.exception(
+                "SetWindowPos frame refresh failed: handle=%s error=%s get_last_error=%s",
+                handle,
+                _win32_error_code(exc),
+                ctypes.get_last_error(),
+            )
             raise WindowOperationError(tr("error.window_frame_refresh", handle=handle)) from exc
-        LOGGER.debug("SetWindowPos frame refresh complete: handle=%s", handle)
+        LOGGER.info("SetWindowPos frame refresh result: handle=%s result=%s", handle, result)
 
     def _set_topmost(self, handle: int, *, enabled: bool) -> None:
         insert_after = win32con.HWND_TOPMOST if enabled else win32con.HWND_NOTOPMOST
+        diagnostics = self._pin_diagnostics(handle, topmost_intent=enabled)
         try:
-            win32gui.SetWindowPos(handle, insert_after, 0, 0, 0, 0, TOPMOST_REFRESH_FLAGS)
+            result = win32gui.SetWindowPos(
+                handle,
+                insert_after,
+                0,
+                0,
+                0,
+                0,
+                TOPMOST_REFRESH_FLAGS,
+            )
+            last_error = ctypes.get_last_error()
         except win32gui.error as exc:
             LOGGER.exception(
-                "SetWindowPos topmost update failed: handle=%s enabled=%s",
+                "SetWindowPos topmost update failed: handle=%s enabled=%s error=%s "
+                "get_last_error=%s diagnostics=%s",
                 handle,
                 enabled,
+                _win32_error_code(exc),
+                ctypes.get_last_error(),
+                diagnostics,
             )
             raise WindowOperationError(tr("error.window_topmost_update", handle=handle)) from exc
-        LOGGER.debug("SetWindowPos topmost update complete: handle=%s enabled=%s", handle, enabled)
+        diagnostics["set_window_pos_result"] = result
+        diagnostics["get_last_error"] = last_error
+        self._last_pin_diagnostics[handle] = diagnostics
+        LOGGER.info(
+            "SetWindowPos topmost update result: handle=%s enabled=%s result=%s "
+            "get_last_error=%s diagnostics=%s",
+            handle,
+            enabled,
+            result,
+            last_error,
+            diagnostics,
+        )
+
+    def _verify_topmost_intent(self, handle: int, *, enabled: bool) -> None:
+        try:
+            extended_style = self._get_extended_style(handle)
+        except WindowOperationError:
+            LOGGER.debug("Could not verify topmost state: handle=%s", handle, exc_info=True)
+            return
+        actual = bool(extended_style & win32con.WS_EX_TOPMOST)
+        if actual != enabled:
+            LOGGER.warning(
+                "Topmost verification mismatch: handle=%s expected=%s actual=%s "
+                "extended_style=0x%08X",
+                handle,
+                enabled,
+                actual,
+                extended_style,
+            )
+            return
+        LOGGER.debug(
+            "Topmost verification succeeded: handle=%s expected=%s extended_style=0x%08X",
+            handle,
+            enabled,
+            extended_style,
+        )
+
+    def _pin_diagnostics(self, handle: int, *, topmost_intent: bool) -> dict[str, Any]:
+        window: WindowInfo | None = None
+        try:
+            window = self.get_window(handle)
+        except Exception:
+            LOGGER.debug("Could not read window info for pin diagnostics: handle=%s", handle)
+
+        extended_style: int | None = None
+        try:
+            extended_style = self._get_extended_style(handle)
+        except Exception:
+            LOGGER.debug("Could not read extended style for pin diagnostics: handle=%s", handle)
+
+        foreground_window: int | None = None
+        try:
+            foreground_window = int(win32gui.GetForegroundWindow())
+        except win32gui.error:
+            LOGGER.debug("Could not read foreground window for pin diagnostics", exc_info=True)
+
+        elevation_state: bool | None = None
+        if window is not None:
+            try:
+                elevation_state = self._process_elevation_state(window.process_id)
+            except Exception:
+                LOGGER.debug("Could not read target elevation for pin diagnostics", exc_info=True)
+
+        diagnostics: dict[str, Any] = {
+            "hwnd": handle,
+            "title": window.title if window is not None else None,
+            "process_name": window.process_name if window is not None else None,
+            "pid": window.process_id if window is not None else None,
+            "target_elevated": elevation_state,
+            "shelfygai_elevated": self._own_process_elevated,
+            "current_foreground_window": foreground_window,
+            "current_topmost_intent": topmost_intent,
+            "current_ex_style": (
+                f"0x{extended_style:08X}" if isinstance(extended_style, int) else None
+            ),
+            "current_is_topmost": (
+                bool(extended_style & win32con.WS_EX_TOPMOST)
+                if isinstance(extended_style, int)
+                else None
+            ),
+        }
+        last = self._last_pin_diagnostics.get(handle)
+        if last:
+            diagnostics["last_set_window_pos_result"] = last.get("set_window_pos_result")
+            diagnostics["last_get_last_error"] = last.get("get_last_error")
+        return diagnostics
 
     def _rollback_style(self, handle: int, original_style: int) -> None:
         try:

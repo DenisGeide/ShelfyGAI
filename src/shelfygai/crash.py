@@ -140,10 +140,16 @@ class EmergencyRecoveryStore:
         self,
         records: Sequence[Mapping[str, Any]],
         *,
-        reason: str = "managed windows changed",
+        pinned_records: Sequence[Mapping[str, Any]] | None = None,
+        reason: str = "hidden windows changed",
     ) -> bool:
         normalized_records = [record for record in records if _is_valid_record(record)]
-        if not normalized_records:
+        normalized_pinned_records = [
+            record
+            for record in (pinned_records or ())
+            if _is_valid_pinned_record(record)
+        ]
+        if not normalized_records and not normalized_pinned_records:
             return self.clear(reason=reason)
 
         payload = {
@@ -153,6 +159,7 @@ class EmergencyRecoveryStore:
             "reason": reason,
             "updated_at": _utc_now(),
             "managed_windows": normalized_records,
+            "pinned_windows": normalized_pinned_records,
         }
         temp_path = self.path.with_suffix(f"{self.path.suffix}.tmp")
         try:
@@ -164,8 +171,9 @@ class EmergencyRecoveryStore:
             return False
 
         LOGGER.info(
-            "Emergency recovery state saved: records=%s reason=%s",
+            "Emergency recovery state saved: hidden_records=%s pinned_records=%s reason=%s",
             len(normalized_records),
+            len(normalized_pinned_records),
             reason,
         )
         return True
@@ -203,7 +211,7 @@ class EmergencyRecoveryStore:
             if isinstance(record, dict) and _is_valid_record(record)
         ]
 
-    def clear(self, *, reason: str = "no managed windows") -> bool:
+    def clear(self, *, reason: str = "no hidden windows") -> bool:
         try:
             if self.path.exists():
                 self.path.unlink()
@@ -322,8 +330,10 @@ class CrashManager:
 
         records = _records_from_payload(payload)
         if not records:
-            LOGGER.info("Emergency recovery state had no window records")
-            self.recovery_store.clear(reason="empty emergency recovery state")
+            pinned_records = _pinned_records_from_payload(payload)
+            LOGGER.info("Emergency recovery state had no hidden window records")
+            if not pinned_records:
+                self.recovery_store.clear(reason="empty emergency recovery state")
             return DetailedRecoveryResult(source_path=str(self.recovery_store.path))
 
         saved_boot_id = payload.get("boot_id")
@@ -414,10 +424,90 @@ class CrashManager:
             source_path=str(self.recovery_store.path),
         )
         if result.failed == 0:
-            self.recovery_store.clear(reason="previous session recovered")
+            pinned_records = _pinned_records_from_payload(payload)
+            if pinned_records:
+                LOGGER.warning(
+                    "Emergency recovery kept so remembered pinned windows can be unpinned"
+                )
+                self.recovery_store.save(
+                    [],
+                    pinned_records=pinned_records,
+                    reason="hidden recovery completed; pinned recovery pending",
+                )
+            else:
+                self.recovery_store.clear(reason="previous session recovered")
         else:
             LOGGER.warning("Emergency recovery state kept for a future retry: %s", result)
         LOGGER.warning("Emergency recovery result: %s", result.as_dict())
+        return result
+
+    def recover_previous_pinned_detailed(
+        self,
+        unpin_record: RecoveryCallback,
+    ) -> DetailedRecoveryResult:
+        payload = self.recovery_store.load()
+        if payload is None:
+            return DetailedRecoveryResult(source_path=str(self.recovery_store.path))
+
+        records = _pinned_records_from_payload(payload)
+        if not records:
+            return DetailedRecoveryResult(source_path=str(self.recovery_store.path))
+
+        saved_boot_id = payload.get("boot_id")
+        active_boot_id = current_boot_id()
+        if saved_boot_id != active_boot_id:
+            items = tuple(
+                _recovery_result_from_record(
+                    record,
+                    status=RECOVERY_STATUS_SKIPPED,
+                    reason=RECOVERY_REASON_STALE_BOOT,
+                )
+                for record in records
+            )
+            self.recovery_store.clear(reason="stale pinned recovery state")
+            return DetailedRecoveryResult(
+                items=items,
+                stale_state=True,
+                source_path=str(self.recovery_store.path),
+            )
+
+        items: list[RecoveryWindowResult] = []
+        for record in records:
+            try:
+                if unpin_record(record):
+                    items.append(
+                        _recovery_result_from_record(
+                            record,
+                            status=RECOVERY_STATUS_RESTORED,
+                            reason=RECOVERY_REASON_RESTORED,
+                        )
+                    )
+                else:
+                    items.append(
+                        _recovery_result_from_record(
+                            record,
+                            status=RECOVERY_STATUS_SKIPPED,
+                            reason=RECOVERY_REASON_NOT_FOUND,
+                        )
+                    )
+            except Exception as exc:
+                LOGGER.exception("Remembered pinned-window unpin failed")
+                items.append(
+                    _recovery_result_from_record(
+                        record,
+                        status=RECOVERY_STATUS_FAILED,
+                        reason=RECOVERY_REASON_ERROR,
+                        detail=str(exc),
+                    )
+                )
+
+        result = DetailedRecoveryResult(
+            items=tuple(items),
+            source_path=str(self.recovery_store.path),
+        )
+        if result.failed == 0 and not _records_from_payload(payload):
+            self.recovery_store.clear(reason="remembered pinned windows unpinned")
+        LOGGER.warning("Remembered pinned-window recovery result: %s", result.as_dict())
         return result
 
     def handle_exception(
@@ -513,11 +603,32 @@ def _is_valid_record(record: Mapping[str, Any]) -> bool:
     )
 
 
+def _is_valid_pinned_record(record: Mapping[str, Any]) -> bool:
+    return (
+        isinstance(record.get("boot_id"), str)
+        and isinstance(record.get("handle"), int)
+        and isinstance(record.get("process_id"), int)
+        and isinstance(record.get("process_name"), str)
+        and isinstance(record.get("title"), str)
+    )
+
+
 def _records_from_payload(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     records = payload.get("managed_windows", [])
     if not isinstance(records, list):
         return []
     return [dict(record) for record in records if isinstance(record, dict)]
+
+
+def _pinned_records_from_payload(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    records = payload.get("pinned_windows", [])
+    if not isinstance(records, list):
+        return []
+    return [
+        dict(record)
+        for record in records
+        if isinstance(record, dict) and _is_valid_pinned_record(record)
+    ]
 
 
 def _recovery_result_from_record(

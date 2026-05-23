@@ -10,7 +10,7 @@ Screenshots should be updated before every public release.
 | # | Screenshot | Path | What To Show |
 | --- | --- | --- | --- |
 | 1 | Main window - Open windows | `docs/assets/screenshots/01-main-open-windows.png` | Open windows page with search, refresh, a selected window, and simple actions. |
-| 2 | Shelf page | `docs/assets/screenshots/02-shelf.png` | Shelf page with one or more shelved windows and restore actions. |
+| 2 | Hidden windows page | `docs/assets/screenshots/02-hidden-windows.png` | Hidden windows page with one or more hidden windows and restore actions. |
 | 3 | Pinned windows page | `docs/assets/screenshots/03-pinned.png` | Pinned page with pinned windows, order controls, and unpin actions. |
 | 4 | Groups page | `docs/assets/screenshots/04-groups.png` | Groups page with clear group names, counts, and group actions. |
 | 5 | Group taskbar window | `docs/assets/screenshots/05-taskbar-group-window.png` | Reserved for the safe app-owned group taskbar window when enabled. |
@@ -47,8 +47,8 @@ Screenshots should be updated before every public release.
 
 1. Build or run the current release candidate.
 2. Open a few safe, ordinary desktop windows.
-3. Capture `01-main-open-windows.png` before moving anything to the shelf.
-4. Move two or three windows to the shelf and capture `02-shelf.png`.
+3. Capture `01-main-open-windows.png` before hiding anything.
+4. Hide two or three windows and capture `02-hidden-windows.png`.
 5. Pin one or two windows and capture `03-pinned.png`.
 6. Create a group, add windows, and capture `04-groups.png`.
 7. Capture `05-taskbar-group-window.png` only when the safe group taskbar

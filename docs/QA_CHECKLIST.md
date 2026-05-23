@@ -49,7 +49,7 @@ Record environment notes:
 - [ ] Accent color selection persists after restart.
 - [ ] `Launch with Windows` toggle updates HKCU only.
 - [ ] `Minimize to tray on close` toggle persists after restart.
-- [ ] `Restore managed windows on exit` toggle persists after restart.
+- [ ] `Restore hidden windows on exit` toggle persists after restart.
 - [ ] `Restore pinned windows on exit` toggle persists after restart.
 - [ ] `Restore pinned windows if minimized` watcher toggle persists after restart.
 - [ ] Pinned watcher interval persists and clamps invalid values safely.
@@ -111,7 +111,7 @@ Record environment notes:
 - [ ] Closing the main window exits when minimize-to-tray is disabled.
 - [ ] `Open ShelfyGAI` restores and focuses the main window.
 - [ ] `Settings` opens the settings window.
-- [ ] `Restore All Windows` restores all managed windows.
+- [ ] `Restore All Windows` restores all hidden windows.
 - [ ] `Quit` performs safe cleanup.
 - [ ] Startup notification appears when enabled.
 - [ ] Startup notification does not appear when disabled or silent startup is enabled.
@@ -138,13 +138,13 @@ Record environment notes:
 - [ ] Hidden window disappears from the Windows taskbar.
 - [ ] Hidden window disappears from Alt+Tab.
 - [ ] Hidden window remains running in Task Manager.
-- [ ] Hidden window appears in the Managed Windows section.
+- [ ] Hidden window appears in the Hidden windows section.
 - [ ] Duplicate hide attempts are prevented.
-- [ ] Multiple windows can be managed at the same time.
+- [ ] Multiple windows can be hidden at the same time.
 - [ ] Restore returns the window to the taskbar.
 - [ ] Restore returns the window to Alt+Tab.
 - [ ] Restore optionally focuses the window.
-- [ ] Restore All restores every managed window.
+- [ ] Restore All restores every hidden window.
 - [ ] Original extended window styles are restored exactly.
 - [ ] Hide and restore events are logged.
 - [ ] Status notifications appear for successful hide and restore.
@@ -173,7 +173,7 @@ Record environment notes:
 - [ ] After hiding, target window no longer appears in Alt+Tab.
 - [ ] After restore, target window appears in Alt+Tab again.
 - [ ] ShelfyGAI remains visible in Alt+Tab when appropriate.
-- [ ] Switching apps while windows are managed does not restore them unexpectedly.
+- [ ] Switching apps while windows are hidden does not restore them unexpectedly.
 
 ## Groups And Drag And Drop
 
@@ -182,7 +182,7 @@ Record environment notes:
 - [ ] Group can be renamed.
 - [ ] Empty group can be deleted.
 - [ ] Non-empty group cannot be deleted without moving windows first.
-- [ ] Managed window can be dragged between groups.
+- [ ] Hidden window can be dragged between groups.
 - [ ] Group counters update after hide, restore, and drag operations.
 - [ ] Group metadata persists after restart.
 - [ ] Stale HWND entries are not restored after reboot.
@@ -212,10 +212,10 @@ Record environment notes:
 
 ## App Crash Recovery
 
-- [ ] Force close ShelfyGAI from Task Manager while no windows are managed.
+- [ ] Force close ShelfyGAI from Task Manager while no windows are hidden.
 - [ ] Relaunch works normally.
-- [ ] Force close ShelfyGAI while one test window is managed.
-- [ ] Relaunch does not crash when reading persisted managed metadata.
+- [ ] Force close ShelfyGAI while one test window is hidden.
+- [ ] Relaunch does not crash when reading persisted hidden-window metadata.
 - [ ] Stale HWND metadata is not restored after reboot.
 - [ ] Logs include the next startup event.
 - [ ] Restore-on-exit behavior is applied during normal quit.
@@ -225,8 +225,8 @@ Record environment notes:
 
 - [ ] Hide a test window.
 - [ ] Close the target process from Task Manager.
-- [ ] Refresh managed windows.
-- [ ] Managed list marks or removes the closed target safely.
+- [ ] Refresh hidden windows.
+- [ ] Hidden windows list marks or removes the closed target safely.
 - [ ] Restore on the closed target does not crash.
 - [ ] Restore All skips the closed target.
 - [ ] A clear status message is shown.
@@ -249,7 +249,7 @@ Record environment notes:
 - [ ] Restart Explorer from Task Manager.
 - [ ] ShelfyGAI remains running.
 - [ ] Tray icon returns after Explorer restarts.
-- [ ] Managed window list remains accurate.
+- [ ] Hidden windows list remains accurate.
 - [ ] Restore still works after Explorer restart.
 - [ ] Restored window returns to the taskbar.
 - [ ] No duplicate tray icons remain.

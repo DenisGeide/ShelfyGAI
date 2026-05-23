@@ -194,3 +194,76 @@ def test_settings_filters_stale_hwnd_metadata_after_reboot(tmp_path) -> None:
 
     assert settings.managed_windows == []
     assert [group["id"] for group in settings.window_groups] == ["ungrouped", "group-work"]
+
+
+def test_overlay_group_color_persistence(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    store = SettingsManager(path)
+    settings = AppSettings(
+        overlay_groups_enabled=True,
+        selected_overlay_group_id="overlay-work",
+        overlay_groups=[
+            {
+                "id": "overlay-work",
+                "name": "Work",
+                "color": "#55c2a2",
+            }
+        ],
+    )
+
+    store.save(settings)
+    loaded = store.load()
+
+    assert loaded.overlay_groups[0]["id"] == "overlay-work"
+    assert loaded.overlay_groups_enabled is True
+    assert loaded.selected_overlay_group_id == "overlay-work"
+    assert loaded.overlay_groups[0]["color"] == "#55c2a2"
+    assert loaded.overlay_groups[0]["marker_width"] == 10
+    assert loaded.overlay_groups[0]["marker_height"] == 88
+    assert loaded.overlay_groups[0]["opacity"] == 0.95
+
+
+def test_overlay_marker_position_persistence(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "overlay_groups": [
+                    {
+                        "id": "overlay-work",
+                        "name": "Work",
+                        "color": "#2f81f7",
+                        "position_by_monitor": {
+                            "monitor-1": {"x": 1440, "y": 1000, "edge": "bottom"}
+                        },
+                        "assigned_window_ids": [100, 100, 200, "bad"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SettingsManager(path).load()
+
+    group = settings.overlay_groups[0]
+    assert group["position_by_monitor"] == {
+        "monitor-1": {"x": 1440, "y": 1000, "edge": "bottom"}
+    }
+    assert group["assigned_window_ids"] == [100, 200]
+
+
+def test_overlay_default_config_migration(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text('{"settings_schema_version": 1, "theme": "dark"}', encoding="utf-8")
+
+    settings = SettingsManager(path).load()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert settings.overlay_groups == []
+    assert settings.overlay_groups_enabled is False
+    assert settings.selected_overlay_group_id == ""
+    assert payload["overlay_groups"] == []
+    assert payload["overlay_groups_enabled"] is False
+    assert payload["selected_overlay_group_id"] == ""
+    assert payload["settings_schema_version"] == AppSettings().settings_schema_version

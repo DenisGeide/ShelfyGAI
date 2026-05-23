@@ -4,9 +4,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from shelfygai.core.errors import GroupOperationError, WindowNotFoundError
-from shelfygai.core.models import DEFAULT_GROUP_ID, WindowGroup, WindowInfo
+from shelfygai.core.errors import GroupOperationError, WindowNotFoundError, WindowOperationError
+from shelfygai.core.models import DEFAULT_GROUP_ID, HideOptions, WindowGroup, WindowInfo
 from shelfygai.core.shelf import ShelfService
+from shelfygai.i18n import set_language
 
 
 class FakeWindowGateway:
@@ -17,11 +18,12 @@ class FakeWindowGateway:
         }
         self.hidden: set[int] = set()
         self.foreground: list[int] = []
-        self.hide_calls: list[int] = []
+        self.hide_calls: list[tuple[int, HideOptions | None]] = []
         self.restore_calls: list[int] = []
         self.restore_focus_values: list[bool] = []
         self.pin_calls: list[tuple[int, bool, bool]] = []
         self.unpin_calls: list[int] = []
+        self.pinned_order_calls: list[list[int]] = []
         self.prevent_minimize_calls: list[tuple[int, bool]] = []
         self.minimized: set[int] = set()
         self.restored_minimized: list[int] = []
@@ -35,8 +37,8 @@ class FakeWindowGateway:
             raise WindowNotFoundError(str(handle))
         return self.windows[handle]
 
-    def hide_window(self, handle: int) -> None:
-        self.hide_calls.append(handle)
+    def hide_window(self, handle: int, options: HideOptions | None = None) -> None:
+        self.hide_calls.append((handle, options))
         self.hidden.add(handle)
 
     def restore_window(self, handle: int, *, focus: bool = True) -> None:
@@ -55,6 +57,14 @@ class FakeWindowGateway:
 
     def unpin_window(self, handle: int) -> None:
         self.unpin_calls.append(handle)
+
+    def apply_pinned_order(self, handles):
+        call = list(handles)
+        self.pinned_order_calls.append(call)
+        return tuple(reversed(call))
+
+    def pin_diagnostics_text(self, handle: int) -> str:
+        return f"pin diagnostics for {handle}"
 
     def set_prevent_minimize(self, handle: int, enabled: bool) -> None:
         self.prevent_minimize_calls.append((handle, enabled))
@@ -95,7 +105,7 @@ def test_shelve_prevents_duplicate_management() -> None:
     second = service.shelve(100)
 
     assert first == second
-    assert gateway.hide_calls == [100]
+    assert gateway.hide_calls == [(100, None)]
     assert len(service.shelved_items()) == 1
 
 
@@ -106,8 +116,41 @@ def test_shelve_supports_multiple_windows() -> None:
     service.shelve(100)
     service.shelve(200)
 
-    assert gateway.hide_calls == [100, 200]
+    assert gateway.hide_calls == [(100, None), (200, None)]
     assert [item.window.handle for item in service.shelved_items()] == [100, 200]
+
+
+def test_shelve_passes_hide_options_to_gateway() -> None:
+    gateway = FakeWindowGateway()
+    service = ShelfService(gateway)
+    options = HideOptions(hide_taskbar=True, hide_alt_tab=False)
+
+    service.shelve(100, hide_options=options)
+
+    assert gateway.hide_calls == [(100, options)]
+
+
+def test_shelve_refuses_pinned_window_until_unpinned() -> None:
+    set_language("en")
+    gateway = FakeWindowGateway()
+    service = ShelfService(gateway)
+    service.pin(100)
+
+    with pytest.raises(WindowOperationError, match="Unpin this window before hiding it."):
+        service.shelve(100)
+
+    assert gateway.hide_calls == []
+
+
+def test_shelve_foreground_refuses_runtime_pinned_window() -> None:
+    gateway = FakeWindowGateway()
+    service = ShelfService(gateway)
+    service.pin(100)
+
+    with pytest.raises(WindowOperationError):
+        service.shelve_foreground()
+
+    assert gateway.hide_calls == []
 
 
 def test_pin_window_sets_topmost_and_tracks_item() -> None:
@@ -145,6 +188,26 @@ def test_unpin_restores_original_pin_state() -> None:
     assert service.pinned_items() == []
 
 
+def test_pin_diagnostics_delegates_to_gateway() -> None:
+    service = ShelfService(FakeWindowGateway())
+
+    assert service.pin_diagnostics(100) == "pin diagnostics for 100"
+
+
+def test_apply_pinned_order_only_uses_registered_live_windows() -> None:
+    gateway = FakeWindowGateway()
+    service = ShelfService(gateway)
+    service.pin(100)
+    service.pin(200)
+    gateway.windows.pop(200)
+
+    applied = service.apply_pinned_order([200, 100, 999])
+
+    assert applied == (100,)
+    assert gateway.pinned_order_calls == [[100]]
+    assert [item.window.handle for item in service.pinned_items()] == [100]
+
+
 def test_prevent_minimize_update_is_tracked() -> None:
     gateway = FakeWindowGateway()
     service = ShelfService(gateway)
@@ -154,6 +217,17 @@ def test_prevent_minimize_update_is_tracked() -> None:
 
     assert gateway.prevent_minimize_calls == [(100, True)]
     assert service.pinned_items()[0].prevent_minimize is True
+
+
+def test_prevent_minimize_watcher_needed_only_for_protected_pins() -> None:
+    gateway = FakeWindowGateway()
+    service = ShelfService(gateway)
+
+    assert service.has_prevent_minimize_pinned_windows() is False
+    service.pin(100)
+    assert service.has_prevent_minimize_pinned_windows() is False
+    service.set_prevent_minimize(100, True)
+    assert service.has_prevent_minimize_pinned_windows() is True
 
 
 def test_pinned_watcher_restores_minimized_windows_and_prunes_closed() -> None:
@@ -178,7 +252,7 @@ def test_shelve_foreground_hides_active_window() -> None:
     item = service.shelve_foreground()
 
     assert item.window.handle == 100
-    assert gateway.hide_calls == [100]
+    assert gateway.hide_calls == [(100, None)]
 
 
 def test_shelve_foreground_requires_manageable_active_window() -> None:

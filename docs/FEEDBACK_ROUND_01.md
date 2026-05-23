@@ -32,7 +32,7 @@ The app should feel more like a simple Windows utility:
 
 The current layout is not immediately understandable for a normal user. It is
 not obvious what the user should do first, what each section means, and which
-actions affect open windows versus shelf windows versus pinned windows.
+actions affect open windows versus hidden windows versus pinned windows.
 
 The first screen should make the workflow obvious:
 
@@ -161,7 +161,7 @@ Fixed in the next UI pass:
 - group list rows show group name and window count
 - selected group state is visually clear
 - group rows now support a right-click context menu with Rename, Delete, Move all
-  to shelf, and Restore all
+  hide, and Restore all
 
 ### 12. Screenshot Documentation Is Needed
 
@@ -171,7 +171,7 @@ Screenshots should cover:
 
 - main window
 - open windows list
-- shelf windows
+- hidden windows
 - pinned windows
 - group controls
 - settings page
@@ -193,7 +193,7 @@ embedding large images directly in Markdown.
 
 Reference: [01-current-main-ui.png](assets/feedback/round-01/01-current-main-ui.png)
 
-Shows the current main UI with sidebar navigation, open windows table, shelf
+Shows the current main UI with sidebar navigation, open windows table, hidden windows
 section, pinned windows section, and quick actions.
 
 What it demonstrates: the UI is visually dense and has too many visible controls

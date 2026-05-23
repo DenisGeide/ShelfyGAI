@@ -10,7 +10,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows guardra
 win32con = pytest.importorskip("win32con")
 
 from shelfygai.core.errors import WindowOperationError  # noqa: E402
-from shelfygai.core.models import WindowInfo  # noqa: E402
+from shelfygai.core.models import HideOptions, WindowInfo  # noqa: E402
 from shelfygai.i18n import set_language  # noqa: E402
 from shelfygai.platform.windows import window_gateway as gateway_module  # noqa: E402
 from shelfygai.platform.windows.window_gateway import (  # noqa: E402
@@ -27,7 +27,7 @@ def english_locale() -> Iterator[None]:
     set_language("en")
 
 
-def test_hide_window_applies_reversible_taskbar_style(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hide_window_defaults_to_taskbar_and_alt_tab(monkeypatch: pytest.MonkeyPatch) -> None:
     gateway, calls = _make_gateway(monkeypatch)
 
     gateway.hide_window(100)
@@ -43,7 +43,85 @@ def test_hide_window_applies_reversible_taskbar_style(monkeypatch: pytest.Monkey
         process_id=42,
         process_name="editor.exe",
         class_name="Chrome_WidgetWin_1",
+        hide_options=HideOptions(),
     )
+
+
+def test_apply_hide_options_taskbar_only_preserves_alt_tab(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, calls = _make_gateway(monkeypatch)
+    options = HideOptions(hide_taskbar=True, hide_alt_tab=False)
+
+    gateway.apply_hide_options(100, options)
+
+    expected_style = 0
+    assert calls["set_styles"] == [expected_style]
+    assert calls["verify_styles"] == [expected_style]
+    assert not (expected_style & win32con.WS_EX_TOOLWINDOW)
+    assert gateway.managed_styles_snapshot()[100].hide_options == options
+
+
+def test_apply_hide_options_alt_tab_only_keeps_appwindow_best_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, calls = _make_gateway(monkeypatch)
+    options = HideOptions(hide_taskbar=False, hide_alt_tab=True)
+
+    gateway.apply_hide_options(100, options)
+
+    expected_style = win32con.WS_EX_APPWINDOW | win32con.WS_EX_TOOLWINDOW
+    assert calls["set_styles"] == [expected_style]
+    assert calls["verify_styles"] == [expected_style]
+    assert expected_style & win32con.WS_EX_APPWINDOW
+    assert expected_style & win32con.WS_EX_TOOLWINDOW
+    assert gateway.managed_styles_snapshot()[100].hide_options == options
+
+
+def test_apply_hide_options_taskbar_and_alt_tab(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, calls = _make_gateway(monkeypatch)
+    options = HideOptions(hide_taskbar=True, hide_alt_tab=True)
+
+    gateway.apply_hide_options(100, options)
+
+    expected_style = win32con.WS_EX_TOOLWINDOW
+    assert calls["set_styles"] == [expected_style]
+    assert calls["verify_styles"] == [expected_style]
+    assert gateway.managed_styles_snapshot()[100].hide_options == options
+
+
+def test_apply_hide_options_requires_at_least_one_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, calls = _make_gateway(monkeypatch)
+
+    with pytest.raises(WindowOperationError, match="Select at least one hide option"):
+        gateway.apply_hide_options(
+            100,
+            HideOptions(hide_taskbar=False, hide_alt_tab=False, hide_tray=False),
+        )
+
+    assert calls["set_styles"] == []
+    assert gateway.managed_styles_snapshot() == {}
+
+
+def test_restore_window_styles_restores_exact_original_style(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_style = win32con.WS_EX_APPWINDOW | win32con.WS_EX_TOPMOST
+    gateway, calls = _make_gateway(monkeypatch, style=original_style)
+
+    gateway.apply_hide_options(100, HideOptions())
+    gateway.restore_window_styles(100)
+
+    assert calls["set_styles"] == [
+        win32con.WS_EX_TOOLWINDOW | win32con.WS_EX_TOPMOST,
+        original_style,
+    ]
+    assert calls["refresh"] == [100, 100]
+    assert gateway.managed_styles_snapshot() == {}
 
 
 def test_hide_window_ignores_duplicate_management(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,6 +164,7 @@ def test_pin_window_sets_topmost_and_preserves_original_styles(
     gateway.pin_window(100, prevent_minimize=True)
 
     assert calls["set_normal_styles"] == [0]
+    assert calls["set_styles"] == []
     assert calls["topmost"] == [True]
     assert gateway.pinned_styles_snapshot()[100] == PinnedWindowStyle(
         handle=100,
@@ -99,7 +178,7 @@ def test_pin_window_sets_topmost_and_preserves_original_styles(
     )
 
 
-def test_unpin_window_restores_original_styles_and_topmost_state(
+def test_unpin_window_removes_topmost_without_changing_extended_styles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gateway, calls = _make_gateway(
@@ -112,9 +191,82 @@ def test_unpin_window_restores_original_styles_and_topmost_state(
     gateway.unpin_window(100)
 
     assert calls["set_normal_styles"] == [0, win32con.WS_MINIMIZEBOX]
-    assert calls["set_styles"] == [win32con.WS_EX_TOPMOST]
-    assert calls["topmost"] == [True, True]
+    assert calls["set_styles"] == []
+    assert calls["topmost"] == [True, False]
     assert gateway.pinned_styles_snapshot() == {}
+
+
+def test_apply_pinned_order_calls_topmost_from_bottom_to_top(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _make_pinned_order_gateway(monkeypatch, [100, 200, 300])
+    calls: list[tuple[int, bool]] = []
+
+    def set_topmost(handle: int, *, enabled: bool) -> None:
+        calls.append((handle, enabled))
+
+    monkeypatch.setattr(gateway, "_set_topmost", set_topmost)
+
+    applied = gateway.apply_pinned_order([100, 200, 300])
+
+    assert calls == [(300, True), (200, True), (100, True)]
+    assert applied == (300, 200, 100)
+
+
+def test_apply_pinned_order_removes_closed_hwnd_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _make_pinned_order_gateway(
+        monkeypatch,
+        [100, 200, 300],
+        available_handles={100, 300},
+    )
+    calls: list[int] = []
+
+    def set_topmost(handle: int, *, enabled: bool) -> None:
+        assert enabled is True
+        calls.append(handle)
+
+    monkeypatch.setattr(gateway, "_set_topmost", set_topmost)
+
+    applied = gateway.apply_pinned_order([100, 200, 300])
+
+    assert calls == [300, 100]
+    assert applied == (300, 100)
+    assert 200 not in gateway.pinned_styles_snapshot()
+
+
+def test_set_topmost_calls_setwindowpos_and_records_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _make_minimal_gateway(monkeypatch, extended_style=win32con.WS_EX_TOPMOST)
+    set_window_pos_calls = []
+
+    def set_window_pos(*args):
+        set_window_pos_calls.append(args)
+        return 1
+
+    monkeypatch.setattr(gateway_module.win32gui, "SetWindowPos", set_window_pos)
+
+    gateway._set_topmost(100, enabled=True)
+
+    assert set_window_pos_calls[0][1] == win32con.HWND_TOPMOST
+    assert gateway._last_pin_diagnostics[100]["set_window_pos_result"] == 1
+    assert gateway._last_pin_diagnostics[100]["current_foreground_window"] == 321
+
+
+def test_set_topmost_reports_setwindowpos_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _make_minimal_gateway(monkeypatch, extended_style=0)
+
+    def set_window_pos(*_args):
+        raise gateway_module.win32gui.error("SetWindowPos failed")
+
+    monkeypatch.setattr(gateway_module.win32gui, "SetWindowPos", set_window_pos)
+
+    with pytest.raises(WindowOperationError, match="Could not update always-on-top"):
+        gateway._set_topmost(100, enabled=True)
 
 
 def test_is_window_available_drops_closed_managed_style(
@@ -226,6 +378,55 @@ def test_hide_window_refuses_when_owner_check_fails(
     assert gateway.managed_styles_snapshot() == {}
 
 
+def _make_minimal_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    extended_style: int,
+) -> WindowsWindowGateway:
+    gateway = object.__new__(WindowsWindowGateway)
+    gateway._own_process_id = 999
+    gateway._own_process_elevated = False
+    gateway._managed_styles = {}
+    gateway._pinned_styles = {}
+    gateway._last_pin_diagnostics = {}
+
+    monkeypatch.setattr(
+        gateway,
+        "get_window",
+        lambda _handle, **_kwargs: WindowInfo(100, "Editor", 42, "editor.exe"),
+    )
+    monkeypatch.setattr(gateway, "_get_extended_style", lambda _handle: extended_style)
+    monkeypatch.setattr(gateway, "_process_elevation_state", lambda _pid: False)
+    monkeypatch.setattr(gateway_module.win32gui, "GetForegroundWindow", lambda: 321)
+    return gateway
+
+
+def _make_pinned_order_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+    handles: list[int],
+    *,
+    available_handles: set[int] | None = None,
+) -> WindowsWindowGateway:
+    gateway = object.__new__(WindowsWindowGateway)
+    gateway._managed_styles = {}
+    gateway._pinned_styles = {
+        handle: PinnedWindowStyle(
+            handle=handle,
+            original_style=win32con.WS_MINIMIZEBOX,
+            original_extended_style=0,
+            pinned_extended_style=win32con.WS_EX_TOPMOST,
+            process_id=handle,
+            process_name=f"app-{handle}.exe",
+            class_name="Chrome_WidgetWin_1",
+        )
+        for handle in handles
+    }
+    gateway._last_pin_diagnostics = {}
+    live_handles = set(handles) if available_handles is None else available_handles
+    monkeypatch.setattr(gateway_module.win32gui, "IsWindow", lambda handle: handle in live_handles)
+    return gateway
+
+
 def _make_gateway(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -242,6 +443,7 @@ def _make_gateway(
     gateway._own_process_elevated = False
     gateway._managed_styles = {}
     gateway._pinned_styles = {}
+    gateway._last_pin_diagnostics = {}
 
     active_window = window or WindowInfo(100, "Editor", 42, "editor.exe")
     calls: dict[str, list[int]] = {

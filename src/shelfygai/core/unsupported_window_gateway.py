@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from shelfygai.core.errors import WindowOperationError
-from shelfygai.core.models import WindowInfo
+from shelfygai.core.models import HideOptions, WindowInfo
 from shelfygai.i18n import tr
 
 
@@ -14,7 +14,7 @@ class UnsupportedWindowGateway:
     def get_window(self, handle: int) -> WindowInfo:
         raise WindowOperationError(tr("error.windows_only_management"))
 
-    def hide_window(self, handle: int) -> None:
+    def hide_window(self, handle: int, options: HideOptions | None = None) -> None:
         raise WindowOperationError(tr("error.windows_only_management"))
 
     def restore_window(self, handle: int, *, focus: bool = True) -> None:
@@ -31,6 +31,12 @@ class UnsupportedWindowGateway:
 
     def unpin_window(self, handle: int) -> None:
         raise WindowOperationError(tr("error.windows_only_management"))
+
+    def apply_pinned_order(self, handles: Sequence[int]) -> Sequence[int]:
+        return []
+
+    def pin_diagnostics_text(self, handle: int) -> str:
+        return tr("error.windows_only_management")
 
     def set_prevent_minimize(self, handle: int, enabled: bool) -> None:
         raise WindowOperationError(tr("error.windows_only_management"))

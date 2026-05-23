@@ -14,7 +14,7 @@
 
 - [ ] No telemetry, analytics, ads, cloud sync, or surprise background services added
 - [ ] Window hide/restore behavior was tested or is not affected
-- [ ] Managed windows are restored or safely handled on failure paths
+- [ ] Hidden windows are restored or safely handled on failure paths
 - [ ] Settings and logs remain local-only
 - [ ] No secrets, local paths, generated files, or private machine data included
 
