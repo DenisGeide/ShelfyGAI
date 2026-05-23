@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.Python
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+dist/
+site/
+*.egg-info/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.bak
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local app artifacts
+*.log
+*.tmp
+*.sqlite
+*.db
+
+# Packaging / release artifacts
+*.exe
+*.msi
+*.zip
+*.7z
+*.spec
+!shelfygai.spec
+!packaging/pyinstaller/*.spec
+
+# Local diagnostics
+logs/
+settings.json

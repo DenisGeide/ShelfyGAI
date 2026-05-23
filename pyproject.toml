@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shelfygai"
+version = "0.1.0"
+description = "A local-first Windows taskbar organization utility."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "ShelfyGAI contributors" }
+]
+keywords = ["windows", "taskbar", "desktop", "pyside6", "productivity"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows :: Windows 10",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Desktop Environment",
+]
+dependencies = [
+  "PySide6>=6.7,<7",
+  "psutil>=5.9",
+  "pywin32>=306; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+build = [
+  "pyinstaller>=6.10",
+]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+  "pyinstaller>=6.10",
+]
+
+[project.scripts]
+shelfygai = "shelfygai.main:run"
+
+[project.urls]
+Homepage = "https://github.com/shelfygai/shelfygai"
+Issues = "https://github.com/shelfygai/shelfygai/issues"
+Security = "https://github.com/shelfygai/shelfygai/security"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+shelfygai = ["resources/*.svg", "i18n/locales/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
