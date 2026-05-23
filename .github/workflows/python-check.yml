@@ -1,0 +1,50 @@
+name: Python Check
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test:
+    name: Lint and test
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Basic import check
+        run: |
+          python -c "import shelfygai; print(shelfygai.__version__)"
+          python -c "from shelfygai.app import build_application; from shelfygai.settings.settings_manager import AppSettings; print(AppSettings().app_version)"
+
+      - name: Lint
+        run: python -m ruff check . --no-cache
+
+      - name: Test
+        run: python -m pytest -p no:cacheprovider
