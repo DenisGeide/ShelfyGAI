@@ -4,10 +4,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from shelfygai.core.errors import GroupOperationError, WindowNotFoundError, WindowOperationError
+from shelfygai.core.errors import GroupOperationError, WindowNotFoundError
 from shelfygai.core.models import DEFAULT_GROUP_ID, HideOptions, WindowGroup, WindowInfo
 from shelfygai.core.shelf import ShelfService
-from shelfygai.i18n import set_language
 
 
 class FakeWindowGateway:
@@ -130,27 +129,28 @@ def test_shelve_passes_hide_options_to_gateway() -> None:
     assert gateway.hide_calls == [(100, options)]
 
 
-def test_shelve_refuses_pinned_window_until_unpinned() -> None:
-    set_language("en")
+def test_shelve_allows_runtime_pinned_window() -> None:
     gateway = FakeWindowGateway()
     service = ShelfService(gateway)
     service.pin(100)
 
-    with pytest.raises(WindowOperationError, match="Unpin this window before hiding it."):
-        service.shelve(100)
+    item = service.shelve(100)
 
-    assert gateway.hide_calls == []
+    assert item.window.handle == 100
+    assert gateway.hide_calls == [(100, None)]
+    assert [item.window.handle for item in service.pinned_items()] == [100]
 
 
-def test_shelve_foreground_refuses_runtime_pinned_window() -> None:
+def test_shelve_foreground_allows_runtime_pinned_window() -> None:
     gateway = FakeWindowGateway()
     service = ShelfService(gateway)
     service.pin(100)
 
-    with pytest.raises(WindowOperationError):
-        service.shelve_foreground()
+    item = service.shelve_foreground()
 
-    assert gateway.hide_calls == []
+    assert item.window.handle == 100
+    assert gateway.hide_calls == [(100, None)]
+    assert [item.window.handle for item in service.pinned_items()] == [100]
 
 
 def test_pin_window_sets_topmost_and_tracks_item() -> None:

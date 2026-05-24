@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from shelfygai.core.errors import GroupOperationError, WindowNotFoundError, WindowOperationError
+from shelfygai.core.errors import GroupOperationError, WindowNotFoundError
 from shelfygai.core.models import (
     DEFAULT_GROUP_ID,
     HideOptions,
@@ -56,9 +56,6 @@ class ShelfService:
         group_id: str = DEFAULT_GROUP_ID,
         hide_options: HideOptions | None = None,
     ) -> ShelfItem:
-        if handle in self._pinned_items:
-            LOGGER.info("Refusing to hide pinned window: handle=%s", handle)
-            raise WindowOperationError(tr("error.hide_pinned_window"))
         if handle in self._items:
             LOGGER.debug("Window already managed: handle=%s", handle)
             return self._items[handle]
