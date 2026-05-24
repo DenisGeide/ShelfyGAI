@@ -211,7 +211,10 @@ class MainWindow(QMainWindow):
         self._shelf_service = shelf_service
         self._settings_store = settings_store
         self._settings = settings
-        self._notifications = NotificationManager(lambda: self._settings)
+        self._notifications = NotificationManager(
+            lambda: self._settings,
+            tray_messages_supported=lambda: False,
+        )
         self._update_service = update_service
         self._recovery_store = EmergencyRecoveryStore()
         self._app_icon = QIcon(str(resource_path("app_icon.svg")))
@@ -2288,7 +2291,6 @@ class MainWindow(QMainWindow):
                 self._selected_overlay_group_button.setToolTip("")
             return
 
-        is_pinned = self._is_pinned_handle(window.handle)
         self._selected_window_icon.setPixmap(
             self._icon_pixmap(window, 24, self._selected_window_icon)
         )
@@ -2297,17 +2299,11 @@ class MainWindow(QMainWindow):
         self._selected_window_state.setText(self._window_state_text(self._available_table, window))
         self._selected_window_hint.setVisible(False)
         if self._selected_hide_button is not None:
-            self._selected_hide_button.setEnabled(not is_pinned)
-            self._selected_hide_button.setToolTip(
-                tr("error.hide_pinned_window") if is_pinned else tr("tooltip.hide_selected")
-            )
+            self._selected_hide_button.setEnabled(True)
+            self._selected_hide_button.setToolTip(tr("tooltip.hide_selected"))
         if self._selected_overlay_group_button is not None:
-            self._selected_overlay_group_button.setEnabled(not is_pinned)
-            self._selected_overlay_group_button.setToolTip(
-                tr("error.hide_pinned_window")
-                if is_pinned
-                else tr("tooltip.add_to_overlay_group")
-            )
+            self._selected_overlay_group_button.setEnabled(True)
+            self._selected_overlay_group_button.setToolTip(tr("tooltip.add_to_overlay_group"))
 
     def _icon_for_window(self, window: WindowInfo, *, queue: bool = True) -> QIcon:
         return self._icon_provider.icon_for_window(window, queue=queue)
@@ -2918,10 +2914,6 @@ class MainWindow(QMainWindow):
                 lambda _checked=False: self._copy_pin_diagnostics(handles)
             )
             hide_action = menu.addAction(tr("action.hide_selected"))
-            hide_blocked = self._handles_include_pinned(handles)
-            hide_action.setEnabled(not hide_blocked)
-            if hide_blocked:
-                hide_action.setToolTip(tr("error.hide_pinned_window"))
             hide_action.triggered.connect(
                 lambda _checked=False: self._shelve_handles(
                     handles,
@@ -2929,9 +2921,6 @@ class MainWindow(QMainWindow):
                 )
             )
             overlay_group_action = menu.addAction(tr("action.add_to_overlay_group"))
-            overlay_group_action.setEnabled(not hide_blocked)
-            if hide_blocked:
-                overlay_group_action.setToolTip(tr("error.hide_pinned_window"))
             overlay_group_action.triggered.connect(
                 lambda _checked=False: self._add_handles_to_overlay_group(handles)
             )
@@ -3234,9 +3223,6 @@ class MainWindow(QMainWindow):
     def _add_handles_to_overlay_group(self, handles: list[int]) -> int:
         if not handles:
             return 0
-        if self._handles_include_pinned(handles):
-            self._show_hide_pinned_message()
-            return 0
         group = self._choose_overlay_group_for_assignment()
         if group is None:
             return 0
@@ -3345,9 +3331,6 @@ class MainWindow(QMainWindow):
         if not handles:
             self._show_status(tr("status.select_open_hide"))
             return
-        if self._handles_include_pinned(handles):
-            self._show_hide_pinned_message()
-            return
         self._shelve_handles(handles, confirm=self._confirm_checkbox.isChecked())
 
     def _shelve_handles(
@@ -3358,9 +3341,6 @@ class MainWindow(QMainWindow):
         reason: str = "windows hidden",
     ) -> int:
         if not handles:
-            return 0
-        if self._handles_include_pinned(handles):
-            self._show_hide_pinned_message()
             return 0
 
         hide_options = self._selected_hide_options()
