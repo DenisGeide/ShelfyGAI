@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from time import perf_counter
 
 from PySide6.QtCore import (
@@ -49,11 +49,9 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
+    QSlider,
     QSpinBox,
     QStackedWidget,
-    QStyle,
     QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
@@ -81,18 +79,60 @@ from shelfygai.logging_config import AppLogger
 from shelfygai.performance import elapsed_ms, log_performance, memory_usage_mb
 from shelfygai.settings.settings_manager import (
     DEFAULT_GLOBAL_HOTKEYS,
-    HOTKEY_QUICK_HIDE,
+    HOTKEY_HIDE_SELECTED_WINDOW,
+    HOTKEY_OPEN_SWITCHER,
+    HOTKEY_PIN_UNPIN_FOCUSED,
+    HOTKEY_RESET_EVERYTHING,
     HOTKEY_RESTORE_LAST,
-    HOTKEY_TOGGLE_VISIBILITY,
+    HOTKEY_TOGGLE_OVERLAY_HUB,
     AppSettings,
     SettingsManager,
     current_boot_id,
 )
+from shelfygai.ui.animations import animation_duration
 from shelfygai.ui.components import GroupButton
 from shelfygai.ui.hide_messages import hide_confirmation_message, hide_limitation_message
 from shelfygai.ui.icons import AppIconProvider
-from shelfygai.ui.onboarding_dialog import ACCENT_COLORS, SettingsDialog
-from shelfygai.ui.overlay_markers import OverlayMarkerManager, OverlayPopupItem
+from shelfygai.ui.notifications import NotificationKind, NotificationManager
+from shelfygai.ui.onboarding_dialog import SettingsDialog
+from shelfygai.ui.overlay_group_dialog import OverlayGroupChoiceDialog
+from shelfygai.ui.overlay_markers import (
+    OverlayDisplayConfig,
+    OverlayMarkerManager,
+    OverlayPopupItem,
+)
+from shelfygai.ui.pages.about_page import build_about_page
+from shelfygai.ui.pages.hidden_windows_page import build_hidden_windows_page
+from shelfygai.ui.pages.open_windows_page import (
+    build_open_windows_page,
+    build_open_windows_panel,
+)
+from shelfygai.ui.pages.overlay_groups_page import (
+    build_overlay_appearance_section,
+    build_overlay_behavior_section,
+    build_overlay_feature_panel,
+    build_overlay_field,
+    build_overlay_group_list_panel,
+    build_overlay_groups_page,
+    build_overlay_position_section,
+    build_overlay_preview_panel,
+    build_overlay_settings_section,
+    build_overlay_slider_setting,
+    build_overlay_visibility_section,
+    configure_int_slider_pair,
+    configure_opacity_slider_pair,
+    set_slider_value,
+    update_overlay_preview,
+)
+from shelfygai.ui.pages.pinned_page import build_pinned_page
+from shelfygai.ui.pages.settings_page import (
+    build_settings_about_section,
+    build_settings_accent_row,
+    build_settings_combo_row,
+    build_settings_page,
+    build_settings_section,
+    build_settings_spin_row,
+)
 from shelfygai.ui.pinned_order import (
     bring_handle_to_front,
     move_handle,
@@ -100,6 +140,19 @@ from shelfygai.ui.pinned_order import (
     ordered_pinned_items,
 )
 from shelfygai.ui.theme import apply_theme
+from shelfygai.ui.widgets.animated_button import AnimatedHoverButton
+from shelfygai.ui.widgets.empty_state_widget import EmptyStateWidget
+from shelfygai.ui.widgets.hidden_window_switcher import (
+    SWITCHER_KIND_HIDDEN,
+    SWITCHER_KIND_OVERLAY_GROUP,
+    SWITCHER_KIND_PINNED,
+    HiddenWindowSwitcher,
+    SwitcherItem,
+)
+from shelfygai.ui.widgets.selected_window_card import build_selected_window_card
+from shelfygai.ui.widgets.toolbar_actions import build_header
+from shelfygai.ui.window_state import window_state_key
+from shelfygai.updates.models import UpdateCheckStatus
 from shelfygai.updates.service import UpdateService
 
 LOGGER = logging.getLogger(__name__)
@@ -107,18 +160,27 @@ LOGGER = logging.getLogger(__name__)
 HANDLE_ROLE = Qt.ItemDataRole.UserRole
 EXE_PATH_ROLE = Qt.ItemDataRole.UserRole + 1
 FILTER_ROLE = Qt.ItemDataRole.UserRole + 2
+STATE_KEY_ROLE = Qt.ItemDataRole.UserRole + 3
 HOTKEY_ACTION_LABEL_KEYS = {
-    HOTKEY_QUICK_HIDE: "hotkey.label.quick_hide",
+    HOTKEY_HIDE_SELECTED_WINDOW: "hotkey.label.hide_selected",
     HOTKEY_RESTORE_LAST: "hotkey.label.restore_last",
-    HOTKEY_TOGGLE_VISIBILITY: "hotkey.label.toggle_visibility",
+    HOTKEY_TOGGLE_OVERLAY_HUB: "hotkey.label.toggle_overlay_hub",
+    HOTKEY_OPEN_SWITCHER: "hotkey.label.open_switcher",
+    HOTKEY_PIN_UNPIN_FOCUSED: "hotkey.label.pin_unpin_focused",
+    HOTKEY_RESET_EVERYTHING: "hotkey.label.reset_everything",
 }
 HOTKEY_ACTION_DESCRIPTION_KEYS = {
-    HOTKEY_QUICK_HIDE: "hotkey.desc.quick_hide",
+    HOTKEY_HIDE_SELECTED_WINDOW: "hotkey.desc.hide_selected",
     HOTKEY_RESTORE_LAST: "hotkey.desc.restore_last",
-    HOTKEY_TOGGLE_VISIBILITY: "hotkey.desc.toggle_visibility",
+    HOTKEY_TOGGLE_OVERLAY_HUB: "hotkey.desc.toggle_overlay_hub",
+    HOTKEY_OPEN_SWITCHER: "hotkey.desc.open_switcher",
+    HOTKEY_PIN_UNPIN_FOCUSED: "hotkey.desc.pin_unpin_focused",
+    HOTKEY_RESET_EVERYTHING: "hotkey.desc.reset_everything",
 }
 OPEN_WINDOWS_AUTO_REFRESH_INTERVAL_MS = 15_000
 SEARCH_FILTER_DEBOUNCE_MS = 180
+WINDOW_STATE_REFRESH_INTERVAL_MS = 1_000
+REFRESH_DEBOUNCE_MS = 160
 NAVIGATION_KEYS = (
     "label.open_windows",
     "label.shelf",
@@ -149,6 +211,7 @@ class MainWindow(QMainWindow):
         self._shelf_service = shelf_service
         self._settings_store = settings_store
         self._settings = settings
+        self._notifications = NotificationManager(lambda: self._settings)
         self._update_service = update_service
         self._recovery_store = EmergencyRecoveryStore()
         self._app_icon = QIcon(str(resource_path("app_icon.svg")))
@@ -184,25 +247,45 @@ class MainWindow(QMainWindow):
         )
         self._overlay_controls_syncing = False
         self._overlay_enabled_checkbox = QCheckBox()
+        self._overlay_use_hub_checkbox = QCheckBox()
+        self._overlay_individual_markers_checkbox = QCheckBox()
+        self._overlay_replace_markers_checkbox = QCheckBox()
+        self._overlay_hub_always_visible_checkbox = QCheckBox()
+        self._overlay_hub_auto_hide_checkbox = QCheckBox()
+        self._overlay_auto_snap_checkbox = QCheckBox()
+        self._overlay_compact_mode_checkbox = QCheckBox()
         self._overlay_groups_list = QListWidget()
         self._overlay_name_edit = QLineEdit()
-        self._overlay_color_button = QPushButton()
+        self._overlay_color_button = AnimatedHoverButton()
         self._overlay_marker_width_spin = QSpinBox()
         self._overlay_marker_height_spin = QSpinBox()
         self._overlay_opacity_spin = QDoubleSpinBox()
         self._overlay_corner_radius_spin = QSpinBox()
         self._overlay_hover_delay_spin = QSpinBox()
+        self._overlay_marker_width_slider = QSlider(Qt.Orientation.Horizontal)
+        self._overlay_marker_height_slider = QSlider(Qt.Orientation.Horizontal)
+        self._overlay_opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._overlay_corner_radius_slider = QSlider(Qt.Orientation.Horizontal)
+        self._overlay_hover_delay_slider = QSlider(Qt.Orientation.Horizontal)
+        self._overlay_marker_spacing_spin = QSpinBox()
+        self._overlay_marker_spacing_slider = QSlider(Qt.Orientation.Horizontal)
+        self._overlay_hub_opacity_spin = QDoubleSpinBox()
+        self._overlay_hub_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._overlay_locked_position_checkbox = QCheckBox()
         self._overlay_hide_fullscreen_checkbox = QCheckBox()
         self._overlay_quick_controls_checkbox = QCheckBox()
-        self._overlay_reset_position_button = QPushButton()
-        self._overlay_delete_button = QPushButton()
-        self._overlay_empty_label = QLabel()
+        self._overlay_reset_position_button = AnimatedHoverButton()
+        self._overlay_delete_button = AnimatedHoverButton()
+        self._overlay_empty_label = EmptyStateWidget(minimum_height=116)
+        self._overlay_preview_marker = QFrame()
+        self._overlay_preview_group_name = QLabel()
+        self._overlay_preview_window_count = QLabel()
         self._overlay_marker_manager = OverlayMarkerManager(
             self._overlay_popup_items,
             parent=self,
         )
         self._overlay_marker_manager.positionSaved.connect(self._save_overlay_marker_position)
+        self._overlay_marker_manager.hubPositionSaved.connect(self._save_overlay_hub_position)
         self._overlay_marker_manager.settingsRequested.connect(
             self._show_overlay_group_settings
         )
@@ -214,6 +297,9 @@ class MainWindow(QMainWindow):
         self._overlay_marker_manager.windowRestoreRequested.connect(
             self._restore_overlay_window
         )
+        self._overlay_marker_manager.windowBringToFrontRequested.connect(
+            self._open_overlay_window
+        )
         self._overlay_marker_manager.windowRemoveRequested.connect(
             self._remove_overlay_window_from_group
         )
@@ -224,18 +310,22 @@ class MainWindow(QMainWindow):
             self._hide_overlay_group_windows
         )
         self._overlay_marker_manager.openShelfyRequested.connect(self._open_from_overlay_popup)
+        self._quick_switcher = HiddenWindowSwitcher(self)
+        self._quick_switcher.itemActivated.connect(self._activate_switcher_item)
         self._open_windows_search = QLineEdit()
         self._open_windows_auto_refresh_checkbox = QCheckBox()
         self._open_windows_refresh_timer = QTimer(self)
         self._open_windows_filter_timer = QTimer(self)
+        self._window_state_refresh_timer = QTimer(self)
+        self._refresh_debounce_timer = QTimer(self)
         self._pinned_watcher_timer = QTimer(self)
         self._header_title = QLabel()
         self._header_subtitle = QLabel()
         self._loading_label = QLabel()
-        self._open_windows_empty_label = QLabel()
-        self._shelf_empty_label = QLabel()
-        self._pinned_empty_label = QLabel()
-        self._group_empty_label = QLabel()
+        self._open_windows_empty_label = EmptyStateWidget(minimum_height=132)
+        self._shelf_empty_label = EmptyStateWidget(minimum_height=132)
+        self._pinned_empty_label = EmptyStateWidget(minimum_height=132)
+        self._group_empty_label = EmptyStateWidget(minimum_height=108)
         self._selected_window_icon = QLabel()
         self._selected_window_app = QLabel()
         self._selected_window_title = QLabel()
@@ -262,11 +352,18 @@ class MainWindow(QMainWindow):
         self._launch_with_windows_checkbox = QCheckBox()
         self._minimize_to_tray_checkbox = QCheckBox()
         self._startup_notification_checkbox = QCheckBox()
+        self._notifications_enabled_checkbox = QCheckBox()
+        self._tray_notifications_checkbox = QCheckBox()
+        self._overlay_notifications_checkbox = QCheckBox()
+        self._restore_notifications_checkbox = QCheckBox()
+        self._pin_notifications_checkbox = QCheckBox()
+        self._silent_mode_checkbox = QCheckBox()
         self._debug_mode_checkbox = QCheckBox()
         self._startup_status_label = QLabel()
         self._startup_status_label.setObjectName("Muted")
         self._startup_status_label.setWordWrap(True)
         self._settings_controls_syncing = False
+        self._settings_sections: list[object] = []
         self._hotkey_enabled_checkboxes: dict[str, QCheckBox] = {}
         self._hotkey_sequence_edits: dict[str, QKeySequenceEdit] = {}
         self._hotkey_status_label = QLabel()
@@ -280,7 +377,11 @@ class MainWindow(QMainWindow):
         self._nav_buttons: list[QPushButton] = []
         self._page_animation: QPropertyAnimation | None = None
         self._tray_icon: QSystemTrayIcon | None = None
+        self._tray_hidden_windows_action: QAction | None = None
+        self._tray_overlay_groups_action: QAction | None = None
         self._tray_restore_all_action: QAction | None = None
+        self._tray_unpin_all_action: QAction | None = None
+        self._tray_reset_action: QAction | None = None
         self._is_quitting = False
         self._tray_hint_shown = False
         self._initial_refresh_done = False
@@ -289,14 +390,24 @@ class MainWindow(QMainWindow):
         self._last_shelf_items: tuple[ShelfItem, ...] = ()
         self._last_pinned_items: tuple[PinnedItem, ...] = ()
         self._pinned_order: list[int] = []
+        self._pending_refresh_reason: str | None = None
 
         self._open_windows_refresh_timer.setInterval(OPEN_WINDOWS_AUTO_REFRESH_INTERVAL_MS)
         self._open_windows_refresh_timer.setTimerType(Qt.TimerType.VeryCoarseTimer)
-        self._open_windows_refresh_timer.timeout.connect(lambda: self._refresh(reason="auto"))
+        self._open_windows_refresh_timer.timeout.connect(
+            lambda: self._request_refresh(reason="auto")
+        )
         self._open_windows_filter_timer.setSingleShot(True)
         self._open_windows_filter_timer.setTimerType(Qt.TimerType.CoarseTimer)
         self._open_windows_filter_timer.setInterval(SEARCH_FILTER_DEBOUNCE_MS)
         self._open_windows_filter_timer.timeout.connect(self._apply_open_windows_filter)
+        self._window_state_refresh_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._window_state_refresh_timer.setInterval(WINDOW_STATE_REFRESH_INTERVAL_MS)
+        self._window_state_refresh_timer.timeout.connect(self._refresh_window_states)
+        self._refresh_debounce_timer.setSingleShot(True)
+        self._refresh_debounce_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._refresh_debounce_timer.setInterval(REFRESH_DEBOUNCE_MS)
+        self._refresh_debounce_timer.timeout.connect(self._run_debounced_refresh)
         self._pinned_watcher_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._pinned_watcher_timer.timeout.connect(self._check_pinned_windows)
         self._configure_table_context_menus()
@@ -308,30 +419,21 @@ class MainWindow(QMainWindow):
         self._loading_label.setObjectName("LoadingPill")
         self._loading_label.setVisible(False)
         self._loading_label.setMinimumHeight(28)
-        self._open_windows_empty_label.setObjectName("EmptyState")
-        self._open_windows_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._open_windows_empty_label.setWordWrap(True)
-        self._open_windows_empty_label.setMinimumHeight(76)
-        self._open_windows_empty_label.setVisible(False)
-        self._shelf_empty_label.setObjectName("EmptyState")
-        self._shelf_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._shelf_empty_label.setWordWrap(True)
-        self._shelf_empty_label.setMinimumHeight(76)
-        self._shelf_empty_label.setVisible(False)
-        self._pinned_empty_label.setObjectName("EmptyState")
-        self._pinned_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._pinned_empty_label.setWordWrap(True)
-        self._pinned_empty_label.setMinimumHeight(76)
-        self._pinned_empty_label.setVisible(False)
-        self._group_empty_label.setObjectName("EmptyState")
-        self._group_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._group_empty_label.setWordWrap(True)
-        self._group_empty_label.setMinimumHeight(76)
-        self._group_empty_label.setVisible(False)
-        self._overlay_empty_label.setObjectName("EmptyState")
-        self._overlay_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._overlay_empty_label.setWordWrap(True)
-        self._overlay_empty_label.setMinimumHeight(76)
+        self._open_windows_empty_label.set_action("", self._request_refresh)
+        self._overlay_empty_label.set_action("", self._create_overlay_group)
+        self._bind_text(
+            self._open_windows_empty_label,
+            "action.refresh",
+            "setActionText",
+        )
+        self._bind_text(
+            self._overlay_empty_label,
+            "action.create_overlay_group",
+            "setActionText",
+        )
+        self._overlay_groups_list.setObjectName("OverlayGroupsList")
+        self._overlay_groups_list.setIconSize(QSize(16, 16))
+        self._overlay_groups_list.setSpacing(4)
         self._overlay_groups_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._overlay_groups_list.setAlternatingRowColors(False)
         self._overlay_groups_list.currentItemChanged.connect(
@@ -350,8 +452,73 @@ class MainWindow(QMainWindow):
         self._overlay_hover_delay_spin.setRange(0, 5_000)
         self._overlay_hover_delay_spin.setSingleStep(100)
         self._overlay_hover_delay_spin.setSuffix(" ms")
+        self._overlay_marker_spacing_spin.setRange(2, 48)
+        self._overlay_marker_spacing_spin.setSingleStep(1)
+        self._overlay_marker_spacing_spin.setSuffix(" px")
+        self._overlay_hub_opacity_spin.setRange(0.25, 1.0)
+        self._overlay_hub_opacity_spin.setSingleStep(0.05)
+        self._overlay_hub_opacity_spin.setDecimals(2)
+        self._configure_int_slider_pair(
+            self._overlay_marker_width_slider,
+            self._overlay_marker_width_spin,
+        )
+        self._configure_int_slider_pair(
+            self._overlay_marker_height_slider,
+            self._overlay_marker_height_spin,
+        )
+        self._configure_opacity_slider_pair()
+        self._configure_int_slider_pair(
+            self._overlay_corner_radius_slider,
+            self._overlay_corner_radius_spin,
+        )
+        self._configure_int_slider_pair(
+            self._overlay_hover_delay_slider,
+            self._overlay_hover_delay_spin,
+        )
+        self._configure_int_slider_pair(
+            self._overlay_marker_spacing_slider,
+            self._overlay_marker_spacing_spin,
+        )
+        self._overlay_hub_opacity_slider.setRange(25, 100)
+        self._overlay_hub_opacity_slider.setSingleStep(5)
+        self._overlay_hub_opacity_slider.valueChanged.connect(
+            lambda value: self._overlay_hub_opacity_spin.setValue(value / 100)
+        )
+        self._overlay_hub_opacity_spin.valueChanged.connect(
+            lambda value: self._set_slider_value(
+                self._overlay_hub_opacity_slider,
+                int(round(float(value) * 100)),
+            )
+        )
         self._overlay_enabled_checkbox.setChecked(self._settings.overlay_groups_enabled)
         self._overlay_enabled_checkbox.toggled.connect(self._set_overlay_groups_enabled)
+        self._overlay_use_hub_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_display_settings()
+        )
+        self._overlay_individual_markers_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_display_settings()
+        )
+        self._overlay_replace_markers_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_display_settings()
+        )
+        self._overlay_hub_always_visible_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_display_settings()
+        )
+        self._overlay_hub_auto_hide_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_display_settings()
+        )
+        self._overlay_auto_snap_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_display_settings()
+        )
+        self._overlay_compact_mode_checkbox.toggled.connect(
+            lambda _checked: self._update_overlay_display_settings()
+        )
+        self._overlay_marker_spacing_spin.valueChanged.connect(
+            lambda _value: self._update_overlay_display_settings()
+        )
+        self._overlay_hub_opacity_spin.valueChanged.connect(
+            lambda _value: self._update_overlay_display_settings()
+        )
         self._overlay_marker_width_spin.valueChanged.connect(
             lambda _value: self._update_overlay_numeric_settings()
         )
@@ -420,15 +587,56 @@ class MainWindow(QMainWindow):
         self._bind_text(self._launch_with_windows_checkbox, "label.launch_with_windows")
         self._bind_text(self._minimize_to_tray_checkbox, "label.minimize_to_tray")
         self._bind_text(self._startup_notification_checkbox, "label.startup_notification")
+        self._bind_text(
+            self._notifications_enabled_checkbox,
+            "label.notifications_enabled",
+        )
+        self._bind_text(
+            self._tray_notifications_checkbox,
+            "label.show_tray_notifications",
+        )
+        self._bind_text(
+            self._overlay_notifications_checkbox,
+            "label.show_overlay_notifications",
+        )
+        self._bind_text(
+            self._restore_notifications_checkbox,
+            "label.show_restore_notifications",
+        )
+        self._bind_text(
+            self._pin_notifications_checkbox,
+            "label.show_pin_unpin_notifications",
+        )
+        self._bind_text(self._silent_mode_checkbox, "label.silent_mode")
         self._bind_text(self._debug_mode_checkbox, "label.debug_logging")
         self._bind_text(self._hotkey_status_label, "hotkey.default_status")
         self._bind_text(self._update_status_label, "about.update.default")
         self._bind_text(self._overlay_enabled_checkbox, "label.overlay_groups_enabled")
+        self._bind_text(self._overlay_use_hub_checkbox, "label.overlay_use_unified_hub")
+        self._bind_text(
+            self._overlay_individual_markers_checkbox,
+            "label.overlay_use_individual_markers",
+        )
+        self._bind_text(
+            self._overlay_replace_markers_checkbox,
+            "label.overlay_replace_individual_markers",
+        )
+        self._bind_text(
+            self._overlay_hub_always_visible_checkbox,
+            "label.overlay_hub_always_visible",
+        )
+        self._bind_text(
+            self._overlay_hub_auto_hide_checkbox,
+            "label.overlay_hub_auto_hide",
+        )
+        self._bind_text(self._overlay_auto_snap_checkbox, "label.overlay_auto_snap")
+        self._bind_text(self._overlay_compact_mode_checkbox, "label.overlay_compact_mode")
         self._bind_text(self._overlay_color_button, "action.choose_color")
         self._bind_text(
             self._overlay_reset_position_button,
             "action.reset_marker_position",
         )
+        self._overlay_delete_button.setObjectName("DangerButton")
         self._bind_text(self._overlay_delete_button, "action.delete_overlay_group")
         self._bind_text(self._overlay_empty_label, "empty.overlay_groups")
         self._bind_text(self._overlay_name_edit, "label.overlay_group_name", "setAccessibleName")
@@ -455,6 +663,16 @@ class MainWindow(QMainWindow):
         self._bind_text(
             self._overlay_hover_delay_spin,
             "label.overlay_hover_delay",
+            "setAccessibleName",
+        )
+        self._bind_text(
+            self._overlay_marker_spacing_spin,
+            "label.overlay_marker_spacing",
+            "setAccessibleName",
+        )
+        self._bind_text(
+            self._overlay_hub_opacity_spin,
+            "label.overlay_hub_opacity",
             "setAccessibleName",
         )
         self._bind_text(
@@ -493,6 +711,12 @@ class MainWindow(QMainWindow):
         self._launch_with_windows_checkbox.toggled.connect(self._set_launch_with_windows)
         self._minimize_to_tray_checkbox.toggled.connect(self._set_minimize_to_tray_on_close)
         self._startup_notification_checkbox.toggled.connect(self._set_startup_notification)
+        self._notifications_enabled_checkbox.toggled.connect(self._set_notification_settings)
+        self._tray_notifications_checkbox.toggled.connect(self._set_notification_settings)
+        self._overlay_notifications_checkbox.toggled.connect(self._set_notification_settings)
+        self._restore_notifications_checkbox.toggled.connect(self._set_notification_settings)
+        self._pin_notifications_checkbox.toggled.connect(self._set_notification_settings)
+        self._silent_mode_checkbox.toggled.connect(self._set_notification_settings)
         self._debug_mode_checkbox.toggled.connect(self._set_debug_mode)
         self._settings_language_combo.currentIndexChanged.connect(self._set_language_from_settings)
         self._settings_theme_combo.currentIndexChanged.connect(self._set_theme_from_settings)
@@ -537,20 +761,28 @@ class MainWindow(QMainWindow):
     def _retranslate(self) -> None:
         for target, setter, key, kwargs in list(self._i18n_bindings):
             self._apply_text_binding(target, setter, key, kwargs)
+        for section in self._settings_sections:
+            retranslate = getattr(section, "retranslate", None)
+            if callable(retranslate):
+                retranslate()
         self._refresh_settings_choice_labels()
         self._set_table_headers(self._available_table)
         self._set_table_headers(self._shelf_table)
         self._set_table_headers(self._pinned_table)
         self._set_table_headers(self._group_table)
+        self._refresh_table_state_translations()
         self._show_page(self._stack.currentIndex())
         self._rebuild_group_sidebar()
         self._populate_pinned(self._last_pinned_items)
         self._populate_group_table(self._last_shelf_items)
+        self._quick_switcher.retranslate()
+        self._refresh_empty_states()
         self._update_selected_window_card()
         for action_id, checkbox in self._hotkey_enabled_checkboxes.items():
             checkbox.setToolTip(
                 tr("tooltip.enable_hotkey", label=self._hotkey_label(action_id).lower())
             )
+        self._sync_tray_actions()
 
     def _set_table_headers(self, table: QTableWidget) -> None:
         table.setHorizontalHeaderLabels(
@@ -616,7 +848,7 @@ class MainWindow(QMainWindow):
         refresh_action = QAction(self)
         self._bind_text(refresh_action, "action.refresh")
         refresh_action.setShortcut("F5")
-        refresh_action.triggered.connect(self._refresh)
+        refresh_action.triggered.connect(self._request_refresh)
         self.addAction(refresh_action)
 
         settings_action = QAction(self)
@@ -689,42 +921,76 @@ class MainWindow(QMainWindow):
             return
 
         tray_menu = QMenu(self)
-
-        open_action = QAction(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DesktopIcon),
-            "",
-            self,
+        tray_menu.setSeparatorsCollapsible(True)
+        tray_menu.setStyleSheet(
+            """
+            QMenu {
+                background: #1a1f26;
+                border: 1px solid #2a3038;
+                border-radius: 10px;
+                padding: 5px;
+                color: #f4f7fa;
+            }
+            QMenu::item {
+                padding: 6px 24px 6px 11px;
+                border-radius: 7px;
+            }
+            QMenu::item:selected {
+                background: #2a323d;
+            }
+            QMenu::item:disabled {
+                color: #7d8793;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #242a32;
+                margin: 5px 6px;
+            }
+            """
         )
+
+        open_action = QAction(self)
         self._bind_text(open_action, "tray.open")
         open_action.triggered.connect(self._show_from_tray)
 
-        restore_all_action = QAction(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton),
-            "",
-            self,
-        )
+        hidden_windows_action = QAction(self)
+        hidden_windows_action.triggered.connect(self._open_hidden_windows_from_tray)
+        self._tray_hidden_windows_action = hidden_windows_action
+
+        overlay_groups_action = QAction(self)
+        overlay_groups_action.triggered.connect(self._open_overlay_groups_from_tray)
+        self._tray_overlay_groups_action = overlay_groups_action
+
+        restore_all_action = QAction(self)
         self._bind_text(restore_all_action, "tray.restore_all")
         restore_all_action.triggered.connect(self._restore_all)
         self._tray_restore_all_action = restore_all_action
 
-        settings_action = QAction(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
-            "",
-            self,
-        )
+        unpin_all_action = QAction(self)
+        self._bind_text(unpin_all_action, "action.unpin_all")
+        unpin_all_action.triggered.connect(self._unpin_all)
+        self._tray_unpin_all_action = unpin_all_action
+
+        reset_action = QAction(self)
+        self._bind_text(reset_action, "action.reset_everything")
+        reset_action.triggered.connect(self._reset_everything)
+        self._tray_reset_action = reset_action
+
+        settings_action = QAction(self)
         self._bind_text(settings_action, "action.settings")
         settings_action.triggered.connect(self._open_settings_from_tray)
 
-        quit_action = QAction(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton),
-            "",
-            self,
-        )
+        quit_action = QAction(self)
         self._bind_text(quit_action, "tray.quit")
         quit_action.triggered.connect(self._quit_from_tray)
 
         tray_menu.addAction(open_action)
+        tray_menu.addAction(hidden_windows_action)
+        tray_menu.addAction(overlay_groups_action)
+        tray_menu.addSeparator()
         tray_menu.addAction(restore_all_action)
+        tray_menu.addAction(unpin_all_action)
+        tray_menu.addAction(reset_action)
         tray_menu.addSeparator()
         tray_menu.addAction(settings_action)
         tray_menu.addSeparator()
@@ -735,6 +1001,7 @@ class MainWindow(QMainWindow):
         self._tray_icon.setContextMenu(tray_menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
         self._tray_icon.show()
+        self._sync_tray_actions()
         LOGGER.info("System tray icon initialized")
 
     def _build_layout(self) -> None:
@@ -748,26 +1015,26 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._build_content(), 1)
 
         self.setCentralWidget(root)
-        self.statusBar().showMessage(tr("status.ready"))
+        self._show_status(tr("status.ready"))
         self._apply_adaptive_layout()
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(248)
+        sidebar.setFixedWidth(232)
 
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(20, 24, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 22, 18, 18)
+        layout.setSpacing(9)
 
         brand_row = QHBoxLayout()
         brand_row.setSpacing(12)
 
         brand_icon = QLabel()
         brand_icon.setObjectName("IconBadge")
-        brand_icon.setFixedSize(48, 48)
+        brand_icon.setFixedSize(44, 44)
         brand_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        brand_icon.setPixmap(QIcon(str(resource_path("app_icon.svg"))).pixmap(34, 34))
+        brand_icon.setPixmap(QIcon(str(resource_path("app_icon.svg"))).pixmap(30, 30))
 
         brand_text = QVBoxLayout()
         brand_text.setSpacing(2)
@@ -783,10 +1050,10 @@ class MainWindow(QMainWindow):
         brand_row.addLayout(brand_text, 1)
 
         layout.addLayout(brand_row)
-        layout.addSpacing(16)
+        layout.addSpacing(12)
 
         for index, label_key in enumerate(NAVIGATION_KEYS):
-            button = QPushButton()
+            button = AnimatedHoverButton()
             button.setObjectName("SidebarButton")
             button.setCheckable(True)
             button.setFlat(True)
@@ -807,8 +1074,8 @@ class MainWindow(QMainWindow):
     def _build_content(self) -> QWidget:
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(28, 24, 28, 20)
-        layout.setSpacing(20)
+        layout.setContentsMargins(24, 22, 24, 18)
+        layout.setSpacing(16)
         self._content_layout = layout
 
         layout.addLayout(self._build_header())
@@ -824,712 +1091,100 @@ class MainWindow(QMainWindow):
         return content
 
     def _build_header(self) -> QHBoxLayout:
-        layout = QHBoxLayout()
-        layout.setSpacing(10)
-
-        title_box = QVBoxLayout()
-        title_box.setSpacing(4)
-        self._header_title.setObjectName("HeaderTitle")
-        self._header_subtitle.setObjectName("HeaderSubtitle")
-        self._header_subtitle.setWordWrap(True)
-        title_box.addWidget(self._header_title)
-        title_box.addWidget(self._header_subtitle)
-
-        layout.addLayout(title_box)
-        layout.addStretch(1)
-        layout.addWidget(self._loading_label)
-        return layout
+        return build_header(self)
 
     def _build_windows_page(self) -> QWidget:
-        page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(16)
-
-        layout.addWidget(self._build_open_windows_panel(), 3)
-        layout.addWidget(self._build_selected_window_card(), 1)
-        return page
+        return build_open_windows_page(self)
 
     def _build_open_windows_panel(self) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(13)
-
-        panel_title = QLabel()
-        panel_title.setObjectName("PanelTitle")
-        self._bind_text(panel_title, "label.open_windows")
-
-        control_row = QHBoxLayout()
-        control_row.setSpacing(10)
-        control_row.addWidget(self._open_windows_search, 1)
-
-        refresh_button = QPushButton()
-        self._bind_text(refresh_button, "action.refresh")
-        refresh_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        refresh_button.clicked.connect(self._refresh)
-        control_row.addWidget(refresh_button)
-        control_row.addWidget(self._open_windows_auto_refresh_checkbox)
-
-        layout.addWidget(panel_title)
-        layout.addLayout(control_row)
-        layout.addWidget(self._available_table, 1)
-        layout.addWidget(self._open_windows_empty_label)
-        return panel
+        return build_open_windows_panel(self)
 
     def _build_selected_window_card(self) -> QFrame:
-        card = QFrame()
-        card.setObjectName("Panel")
-        card.setMinimumWidth(300)
-        card.setMaximumWidth(380)
-
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
-
-        title = QLabel()
-        title.setObjectName("PanelTitle")
-        self._bind_text(title, "label.selected_window")
-
-        identity_row = QHBoxLayout()
-        identity_row.setSpacing(12)
-        text_box = QVBoxLayout()
-        text_box.setSpacing(4)
-        text_box.addWidget(self._selected_window_app)
-        text_box.addWidget(self._selected_window_title)
-        text_box.addWidget(self._selected_window_state)
-        identity_row.addWidget(self._selected_window_icon)
-        identity_row.addLayout(text_box, 1)
-
-        actions_title = QLabel()
-        actions_title.setObjectName("SectionTitle")
-        self._bind_text(actions_title, "label.actions")
-
-        move_button = self._make_button(
-            "action.move_to_shelf",
-            self._shelve_selected,
-            primary=True,
-            icon=QStyle.StandardPixmap.SP_ArrowForward,
-        )
-        self._selected_hide_button = move_button
-        overlay_group_button = self._make_button(
-            "action.add_to_overlay_group",
-            self._add_selected_to_overlay_group,
-        )
-        self._selected_overlay_group_button = overlay_group_button
-        pin_button = self._make_button(
-            "action.pin",
-            self._pin_selected,
-            icon=QStyle.StandardPixmap.SP_ArrowUp,
-        )
-        front_button = self._make_button(
-            "action.bring_to_front",
-            self._bring_selected_forward,
-            icon=QStyle.StandardPixmap.SP_ArrowUp,
-        )
-
-        options_title = QLabel()
-        options_title.setObjectName("SectionTitle")
-        self._bind_text(options_title, "label.hide_options")
-
-        tray_note = QLabel()
-        tray_note.setObjectName("Muted")
-        tray_note.setWordWrap(True)
-        self._bind_text(tray_note, "text.tray_hiding_limited")
-
-        layout.addWidget(title)
-        layout.addLayout(identity_row)
-        layout.addWidget(self._selected_window_hint)
-        layout.addWidget(actions_title)
-        layout.addWidget(move_button)
-        layout.addWidget(overlay_group_button)
-        layout.addWidget(pin_button)
-        layout.addWidget(front_button)
-        layout.addSpacing(6)
-        layout.addWidget(options_title)
-        layout.addWidget(self._hide_taskbar_checkbox)
-        layout.addWidget(self._hide_alt_tab_checkbox)
-        layout.addWidget(self._hide_tray_checkbox)
-        layout.addWidget(tray_note)
-        layout.addStretch(1)
-        self._update_selected_window_card()
-        return card
-
+        return build_selected_window_card(self)
 
     def _build_shelf_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-        action_row.addStretch(1)
-        action_row.addWidget(
-            self._make_button(
-                "action.restore",
-                lambda: self._restore_selected(self._shelf_table),
-                primary=True,
-                icon=QStyle.StandardPixmap.SP_ArrowBack,
-            )
-        )
-        action_row.addWidget(
-            self._make_button(
-                "action.restore_all",
-                self._restore_all,
-                icon=QStyle.StandardPixmap.SP_DialogResetButton,
-            )
-        )
-        action_row.addWidget(
-            self._make_button(
-                "action.move_to_overlay_group",
-                self._move_selected_hidden_to_overlay_group,
-            )
-        )
-        action_row.addWidget(
-            self._make_button(
-                "action.remove_from_overlay_group",
-                self._remove_selected_from_overlay_group,
-            )
-        )
-        layout.addLayout(action_row)
-        layout.addWidget(self._shelf_table, 1)
-        layout.addWidget(self._shelf_empty_label)
-        return page
+        return build_hidden_windows_page(self)
 
     def _build_pinned_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-        action_row.addStretch(1)
-        action_row.addWidget(
-            self._make_button("action.move_up", lambda: self._move_pinned_selection(-1))
-        )
-        action_row.addWidget(
-            self._make_button("action.move_down", lambda: self._move_pinned_selection(1))
-        )
-        action_row.addWidget(
-            self._make_button(
-                "action.bring_to_front",
-                self._bring_pinned_selection_to_front,
-            )
-        )
-        action_row.addWidget(
-            self._make_button(
-                "action.unpin",
-                self._unpin_selected,
-                primary=True,
-            )
-        )
-        layout.addLayout(action_row)
-        layout.addWidget(self._pinned_table, 1)
-        layout.addWidget(self._pinned_empty_label)
-        return page
+        return build_pinned_page(self)
 
     def _build_groups_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        return build_overlay_groups_page(self)
 
-        description = QLabel()
-        description.setObjectName("Muted")
-        description.setWordWrap(True)
-        self._bind_text(description, "overlay.description")
-        layout.addWidget(description)
+    def _build_overlay_group_list_panel(self) -> QFrame:
+        return build_overlay_group_list_panel(self)
 
-        group_panel = QFrame()
-        group_panel.setObjectName("Panel")
-        group_panel.setMinimumWidth(280)
-        group_panel.setMaximumWidth(360)
-        group_layout = QVBoxLayout(group_panel)
-        group_layout.setContentsMargins(18, 18, 18, 18)
-        group_layout.setSpacing(12)
+    def _build_overlay_feature_panel(self) -> QWidget:
+        return build_overlay_feature_panel(self)
 
-        group_title = QLabel()
-        group_title.setObjectName("PanelTitle")
-        self._bind_text(group_title, "label.overlay_groups_list")
+    def _build_overlay_preview_panel(self) -> QFrame:
+        return build_overlay_preview_panel(self)
 
-        group_layout.addWidget(group_title)
-        group_layout.addWidget(self._overlay_enabled_checkbox)
-        group_layout.addWidget(
-            self._make_button(
-                "action.create_overlay_group",
-                self._create_overlay_group,
-                primary=True,
-            )
-        )
-        group_layout.addWidget(self._overlay_groups_list, 1)
-        group_layout.addWidget(self._overlay_empty_label)
+    def _build_overlay_appearance_section(self) -> QFrame:
+        return build_overlay_appearance_section(self)
 
-        settings_panel = QFrame()
-        settings_panel.setObjectName("Panel")
-        settings_layout = QVBoxLayout(settings_panel)
-        settings_layout.setContentsMargins(18, 18, 18, 18)
-        settings_layout.setSpacing(12)
+    def _build_overlay_behavior_section(self) -> QFrame:
+        return build_overlay_behavior_section(self)
 
-        settings_title = QLabel()
-        settings_title.setObjectName("PanelTitle")
-        self._bind_text(settings_title, "label.selected_overlay_group_settings")
-        settings_layout.addWidget(settings_title)
+    def _build_overlay_position_section(self) -> QFrame:
+        return build_overlay_position_section(self)
 
-        form = QGridLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
-        form.setColumnStretch(1, 1)
-        self._add_overlay_setting_row(form, 0, "label.overlay_group_name", self._overlay_name_edit)
-        self._add_overlay_setting_row(
-            form,
-            1,
-            "label.overlay_group_color",
-            self._overlay_color_button,
-        )
-        self._add_overlay_setting_row(
-            form,
-            2,
-            "label.overlay_marker_width",
-            self._overlay_marker_width_spin,
-        )
-        self._add_overlay_setting_row(
-            form,
-            3,
-            "label.overlay_marker_height",
-            self._overlay_marker_height_spin,
-        )
-        self._add_overlay_setting_row(
-            form,
-            4,
-            "label.overlay_opacity",
-            self._overlay_opacity_spin,
-        )
-        self._add_overlay_setting_row(
-            form,
-            5,
-            "label.overlay_corner_radius",
-            self._overlay_corner_radius_spin,
-        )
-        self._add_overlay_setting_row(
-            form,
-            6,
-            "label.overlay_hover_delay",
-            self._overlay_hover_delay_spin,
-        )
-        settings_layout.addLayout(form)
-        settings_layout.addWidget(self._overlay_locked_position_checkbox)
-        settings_layout.addWidget(self._overlay_hide_fullscreen_checkbox)
-        settings_layout.addWidget(self._overlay_quick_controls_checkbox)
+    def _build_overlay_visibility_section(self) -> QFrame:
+        return build_overlay_visibility_section(self)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
-        actions.addWidget(self._overlay_reset_position_button)
-        actions.addStretch(1)
-        actions.addWidget(self._overlay_delete_button)
-        settings_layout.addLayout(actions)
-        settings_layout.addStretch(1)
+    def _build_overlay_settings_section(self, title_key: str) -> QFrame:
+        return build_overlay_settings_section(self, title_key)
 
-        content = QHBoxLayout()
-        content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(16)
-        content.addWidget(group_panel)
-        content.addWidget(settings_panel, 1)
-        layout.addLayout(content, 1)
-        self._populate_overlay_groups_list()
-        return page
+    def _build_overlay_field(self, label_key: str, widget: QWidget) -> QWidget:
+        return build_overlay_field(self, label_key, widget)
 
-    def _add_overlay_setting_row(
+    def _build_overlay_slider_setting(
         self,
-        layout: QGridLayout,
-        row: int,
         label_key: str,
-        widget: QWidget,
-    ) -> None:
-        label = QLabel()
-        label.setObjectName("Muted")
-        self._bind_text(label, label_key)
-        layout.addWidget(label, row, 0)
-        layout.addWidget(widget, row, 1)
+        slider: QSlider,
+        spinbox: QWidget,
+    ) -> QWidget:
+        return build_overlay_slider_setting(self, label_key, slider, spinbox)
+
+    def _configure_int_slider_pair(self, slider: QSlider, spinbox: QSpinBox) -> None:
+        configure_int_slider_pair(slider, spinbox)
+
+    def _configure_opacity_slider_pair(self) -> None:
+        configure_opacity_slider_pair(self)
+
+    def _set_slider_value(self, slider: QSlider, value: int) -> None:
+        set_slider_value(slider, value)
+
+    def _update_overlay_preview(self, group: OverlayGroup | None = None) -> None:
+        update_overlay_preview(self, group)
 
     def _build_settings_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        content = QWidget()
-        content_layout = QGridLayout(content)
-        content_layout.setContentsMargins(0, 0, 8, 0)
-        content_layout.setHorizontalSpacing(14)
-        content_layout.setVerticalSpacing(14)
-        content_layout.setColumnStretch(0, 1)
-        content_layout.setColumnStretch(1, 1)
-
-        general_panel = self._build_settings_section(
-            "settings.section.general",
-            [
-                self._open_windows_auto_refresh_checkbox,
-                self._debug_mode_checkbox,
-            ],
-        )
-        appearance_panel = self._build_settings_section(
-            "settings.section.appearance",
-            [
-                self._build_settings_combo_row("label.theme", self._settings_theme_combo),
-                self._build_settings_accent_row(),
-            ],
-        )
-        language_panel = self._build_settings_section(
-            "settings.section.language",
-            [
-                self._build_settings_combo_row(
-                    "label.language",
-                    self._settings_language_combo,
-                ),
-            ],
-        )
-        startup_panel = self._build_settings_section(
-            "settings.section.startup",
-            [
-                self._launch_with_windows_checkbox,
-                self._startup_notification_checkbox,
-                self._startup_status_label,
-            ],
-        )
-        tray_panel = self._build_settings_section(
-            "settings.section.tray",
-            [self._minimize_to_tray_checkbox],
-        )
-        safety_panel = self._build_settings_section(
-            "settings.section.safety",
-            [
-                self._restore_on_exit_checkbox,
-                self._focus_restored_checkbox,
-                self._confirm_quit_checkbox,
-                self._confirm_checkbox,
-            ],
-        )
-        pin_panel = self._build_settings_section(
-            "settings.section.pin_windows",
-            [
-                self._restore_pinned_on_exit_checkbox,
-                self._prevent_minimize_watcher_checkbox,
-                self._build_settings_spin_row(
-                    "label.pinned_watcher_interval",
-                    self._pinned_watcher_interval_spin,
-                ),
-                self._allow_pin_self_checkbox,
-            ],
-        )
-
-        content_layout.addWidget(general_panel, 0, 0)
-        content_layout.addWidget(appearance_panel, 0, 1)
-        content_layout.addWidget(language_panel, 1, 0)
-        content_layout.addWidget(startup_panel, 1, 1)
-        content_layout.addWidget(tray_panel, 2, 0)
-        content_layout.addWidget(safety_panel, 2, 1)
-        content_layout.addWidget(pin_panel, 3, 0, 1, 2)
-        content_layout.addWidget(self._build_hotkeys_panel(), 4, 0, 1, 2)
-        content_layout.addWidget(self._build_settings_about_section(), 5, 0, 1, 2)
-        content_layout.setRowStretch(6, 1)
-
-        scroll.setWidget(content)
-        layout.addWidget(scroll, 1)
-        self._sync_settings_controls()
-        return page
+        return build_settings_page(self)
 
     def _build_settings_section(self, title_key: str, widgets: list[QWidget]) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(18, 16, 18, 16)
-        panel_layout.setSpacing(11)
-
-        title = QLabel()
-        title.setObjectName("PanelTitle")
-        self._bind_text(title, title_key)
-        panel_layout.addWidget(title)
-
-        for widget in widgets:
-            panel_layout.addWidget(widget)
-
-        return panel
+        return build_settings_section(self, title_key, widgets)
 
     def _build_settings_combo_row(self, label_key: str, combo: QComboBox) -> QWidget:
-        row = QWidget()
-        layout = QGridLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(12)
-        layout.setColumnStretch(1, 1)
-
-        label = QLabel()
-        label.setObjectName("Muted")
-        self._bind_text(label, label_key)
-        self._bind_text(combo, label_key, "setAccessibleName")
-
-        layout.addWidget(label, 0, 0)
-        layout.addWidget(combo, 0, 1)
-        return row
+        return build_settings_combo_row(self, label_key, combo)
 
     def _build_settings_spin_row(self, label_key: str, spin_box: QSpinBox) -> QWidget:
-        row = QWidget()
-        layout = QGridLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(12)
-        layout.setColumnStretch(1, 1)
-
-        label = QLabel()
-        label.setObjectName("Muted")
-        self._bind_text(label, label_key)
-        self._bind_text(spin_box, label_key, "setAccessibleName")
-
-        layout.addWidget(label, 0, 0)
-        layout.addWidget(spin_box, 0, 1)
-        return row
+        return build_settings_spin_row(self, label_key, spin_box)
 
     def _build_settings_accent_row(self) -> QWidget:
-        row = QWidget()
-        layout = QGridLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(12)
-        layout.setColumnStretch(1, 1)
-
-        label = QLabel()
-        label.setObjectName("Muted")
-        self._bind_text(label, "label.accent_color")
-
-        chips = QWidget()
-        chips_layout = QHBoxLayout(chips)
-        chips_layout.setContentsMargins(0, 0, 0, 0)
-        chips_layout.setSpacing(10)
-
-        for name_key, color in ACCENT_COLORS:
-            button = QToolButton()
-            button.setCheckable(True)
-            button.setProperty("i18n_key", name_key)
-            button.setFixedSize(34, 34)
-            button.setStyleSheet(
-                f"""
-                QToolButton {{
-                    background: {color};
-                    border: 2px solid transparent;
-                    border-radius: 17px;
-                }}
-                QToolButton:checked {{
-                    border: 3px solid #ffffff;
-                }}
-                QToolButton:hover {{
-                    border: 3px solid rgba(255, 255, 255, 0.72);
-                }}
-                """
-            )
-            button.clicked.connect(
-                lambda _checked=False, selected=color: self._set_accent_from_settings(selected)
-            )
-            self._settings_accent_buttons[color] = button
-            self._settings_accent_group.addButton(button)
-            chips_layout.addWidget(button)
-
-        chips_layout.addStretch(1)
-        layout.addWidget(label, 0, 0)
-        layout.addWidget(chips, 0, 1)
-        return row
+        return build_settings_accent_row(self)
 
     def _build_settings_about_section(self) -> QFrame:
-        version_label = QLabel()
-        version_label.setObjectName("CardTitle")
-        self._bind_text(version_label, "about.version", version=APP_VERSION)
-
-        license_label = QLabel()
-        license_label.setObjectName("Muted")
-        self._bind_text(license_label, "about.license.detail")
-
-        privacy_label = QLabel()
-        privacy_label.setObjectName("Muted")
-        privacy_label.setWordWrap(True)
-        self._bind_text(privacy_label, "about.privacy")
-
-        storage_label = QLabel()
-        storage_label.setObjectName("Muted")
-        storage_label.setWordWrap(True)
-        self._bind_text(storage_label, "settings.storage_path")
-
-        github_button = self._make_button(
-            "github.repository",
-            self._open_github,
-            icon=QStyle.StandardPixmap.SP_DialogOpenButton,
-        )
-
-        return self._build_settings_section(
-            "settings.section.about",
-            [version_label, license_label, privacy_label, storage_label, github_button],
-        )
+        return build_settings_about_section(self)
 
     def _build_about_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 8, 0)
-        content_layout.setSpacing(14)
-
-        hero = QFrame()
-        hero.setObjectName("AboutHero")
-        hero_layout = QHBoxLayout(hero)
-        hero_layout.setContentsMargins(22, 22, 22, 22)
-        hero_layout.setSpacing(18)
-
-        logo = QLabel()
-        logo.setObjectName("AboutLogo")
-        logo.setFixedSize(72, 72)
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setPixmap(QIcon(str(resource_path("app_icon.svg"))).pixmap(52, 52))
-
-        copy_box = QVBoxLayout()
-        copy_box.setSpacing(7)
-
-        title = QLabel(APP_NAME)
-        title.setObjectName("HeroTitle")
-        description = QLabel()
-        description.setObjectName("Muted")
-        description.setWordWrap(True)
-        self._bind_text(description, "about.description")
-
-        button_row = QHBoxLayout()
-        button_row.setSpacing(10)
-        github_button = self._make_button(
-            "github.repository",
-            self._open_github,
-            icon=QStyle.StandardPixmap.SP_DialogOpenButton,
-        )
-        github_button.setObjectName("PrimaryButton")
-        button_row.addWidget(github_button)
-        button_row.addStretch(1)
-
-        copy_box.addWidget(title)
-        copy_box.addWidget(description)
-        copy_box.addLayout(button_row)
-        hero_layout.addWidget(logo)
-        hero_layout.addLayout(copy_box, 1)
-
-        info_grid = QGridLayout()
-        info_grid.setContentsMargins(0, 0, 0, 0)
-        info_grid.setHorizontalSpacing(14)
-        info_grid.setVerticalSpacing(14)
-        info_grid.setColumnStretch(0, 1)
-        info_grid.setColumnStretch(1, 1)
-        info_grid.addWidget(
-            self._build_about_info_tile("about.version.title", "about.version", APP_VERSION),
-            0,
-            0,
-        )
-        info_grid.addWidget(
-            self._build_about_info_tile("about.license", "about.license.detail"),
-            0,
-            1,
-        )
-        info_grid.addWidget(
-            self._build_about_info_tile("about.privacy.title", "about.privacy"),
-            1,
-            0,
-            1,
-            2,
-        )
-        info_grid.addWidget(
-            self._build_about_info_tile("about.github.title", "about.github.copy"),
-            2,
-            0,
-            1,
-            2,
-        )
-
-        update_panel = QFrame()
-        update_panel.setObjectName("Panel")
-        update_layout = QVBoxLayout(update_panel)
-        update_layout.setContentsMargins(18, 18, 18, 18)
-        update_layout.setSpacing(12)
-
-        update_title = QLabel()
-        update_title.setObjectName("SectionTitle")
-        self._bind_text(update_title, "about.updates.title")
-        update_copy = QLabel()
-        update_copy.setObjectName("Muted")
-        update_copy.setWordWrap(True)
-        self._bind_text(update_copy, "about.updates.copy")
-
-        self._update_status_label.setObjectName("EmptyState")
-        self._update_status_label.setWordWrap(True)
-
-        check_button = QPushButton()
-        self._bind_text(check_button, "about.update.button")
-        check_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        check_button.clicked.connect(self._check_for_updates)
-
-        update_layout.addWidget(update_title)
-        update_layout.addWidget(update_copy)
-        update_layout.addWidget(self._update_status_label)
-        update_layout.addWidget(check_button, alignment=Qt.AlignmentFlag.AlignLeft)
-
-        content_layout.addWidget(hero)
-        content_layout.addLayout(info_grid)
-        content_layout.addWidget(update_panel)
-        content_layout.addStretch(1)
-
-        scroll.setWidget(content)
-        layout.addWidget(scroll, 1)
-        return page
-
-    def _build_about_info_tile(
-        self,
-        title_key: str,
-        body_key: str,
-        *args: object,
-    ) -> QFrame:
-        tile = QFrame()
-        tile.setObjectName("InfoTile")
-        layout = QVBoxLayout(tile)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(7)
-
-        title = QLabel()
-        title.setObjectName("SectionTitle")
-        self._bind_text(title, title_key)
-
-        body = QLabel()
-        body.setObjectName("Muted")
-        body.setWordWrap(True)
-        if args:
-            self._bind_text(body, body_key, version=args[0])
-        else:
-            self._bind_text(body, body_key)
-
-        layout.addWidget(title)
-        layout.addWidget(body)
-        return tile
+        return build_about_page(self)
 
     def _build_hotkeys_panel(self) -> QFrame:
         panel = QFrame()
         panel.setObjectName("Panel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         title = QLabel()
         title.setObjectName("PanelTitle")
@@ -1565,7 +1220,7 @@ class MainWindow(QMainWindow):
             sequence_edit.setMaximumSequenceLength(1)
             sequence_edit.editingFinished.connect(self._save_hotkey_settings)
 
-            clear_button = QPushButton()
+            clear_button = AnimatedHoverButton()
             self._bind_text(clear_button, "action.clear")
             clear_button.clicked.connect(
                 lambda _checked=False, current_action=action_id: self._clear_hotkey(
@@ -1581,7 +1236,7 @@ class MainWindow(QMainWindow):
             grid.addWidget(sequence_edit, row, 2)
             grid.addWidget(clear_button, row, 3)
 
-        restore_defaults_button = QPushButton()
+        restore_defaults_button = AnimatedHoverButton()
         self._bind_text(restore_defaults_button, "action.restore_default_hotkeys")
         restore_defaults_button.clicked.connect(self._restore_default_hotkeys)
 
@@ -1600,17 +1255,19 @@ class MainWindow(QMainWindow):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSortingEnabled(True)
+        table.setSortingEnabled(False)
         table.setShowGrid(False)
         table.setWordWrap(False)
-        table.setIconSize(QSize(20, 20))
+        table.setIconSize(QSize(18, 18))
         table.setCornerButtonEnabled(False)
         table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
-        table.verticalHeader().setDefaultSectionSize(38)
+        table.verticalHeader().setDefaultSectionSize(32)
         table.horizontalHeader().setHighlightSections(False)
+        table.horizontalHeader().setSectionsClickable(False)
+        table.horizontalHeader().setSortIndicatorShown(False)
         table.horizontalHeader().setMinimumSectionSize(48)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(0, 44)
+        table.setColumnWidth(0, 40)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
@@ -1622,16 +1279,30 @@ class MainWindow(QMainWindow):
         callback: object,
         *,
         primary: bool = False,
-        icon: QStyle.StandardPixmap | None = None,
     ) -> QPushButton:
-        button = QPushButton()
+        button = AnimatedHoverButton()
         self._bind_text(button, text_key)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         if primary:
             button.setObjectName("PrimaryButton")
-        if icon is not None:
-            button.setIcon(self.style().standardIcon(icon))
-            button.setIconSize(QSize(17, 17))
         button.clicked.connect(callback)  # type: ignore[arg-type]
+        return button
+
+    def _make_link_button(
+        self,
+        text_key: str,
+        url: str,
+        *,
+        primary: bool = False,
+    ) -> QPushButton:
+        button = AnimatedHoverButton()
+        self._bind_text(button, text_key)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        if primary:
+            button.setObjectName("PrimaryButton")
+        button.clicked.connect(lambda _checked=False, current_url=url: self._open_url(current_url))
         return button
 
     def _show_page(self, page: int) -> None:
@@ -1642,6 +1313,8 @@ class MainWindow(QMainWindow):
                 self._configure_open_windows_auto_refresh(
                     self._settings.open_windows_auto_refresh
                 )
+            if hasattr(self, "_window_state_refresh_timer"):
+                self._configure_window_state_refresh()
         if hasattr(self, "_header_title"):
             title_key, subtitle_key = PAGE_COPY_KEYS.get(page, PAGE_COPY_KEYS[0])
             self._header_title.setText(tr(title_key))
@@ -1659,10 +1332,14 @@ class MainWindow(QMainWindow):
     def _animate_page(self, widget: QWidget | None) -> None:
         if widget is None:
             return
+        duration = animation_duration(120)
+        if duration == 0:
+            widget.setGraphicsEffect(None)
+            return
         effect = QGraphicsOpacityEffect(widget)
         widget.setGraphicsEffect(effect)
         self._page_animation = QPropertyAnimation(effect, b"opacity", self)
-        self._page_animation.setDuration(120)
+        self._page_animation.setDuration(duration)
         self._page_animation.setStartValue(0.72)
         self._page_animation.setEndValue(1.0)
         self._page_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -1689,14 +1366,14 @@ class MainWindow(QMainWindow):
     def _apply_adaptive_layout(self) -> None:
         compact = self.width() < 980
         if self._sidebar is not None:
-            self._sidebar.setFixedWidth(218 if compact else 248)
+            self._sidebar.setFixedWidth(208 if compact else 232)
         if self._content_layout is not None:
             if compact:
-                self._content_layout.setContentsMargins(18, 18, 18, 14)
-                self._content_layout.setSpacing(14)
+                self._content_layout.setContentsMargins(16, 16, 16, 14)
+                self._content_layout.setSpacing(12)
             else:
-                self._content_layout.setContentsMargins(28, 24, 28, 20)
-                self._content_layout.setSpacing(20)
+                self._content_layout.setContentsMargins(24, 22, 24, 18)
+                self._content_layout.setSpacing(16)
 
     def resizeEvent(self, event: object) -> None:
         self._apply_adaptive_layout()
@@ -1706,9 +1383,11 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         self._schedule_initial_refresh()
         self._configure_open_windows_auto_refresh(self._settings.open_windows_auto_refresh)
+        self._configure_window_state_refresh()
 
     def hideEvent(self, event: object) -> None:
         self._configure_open_windows_auto_refresh(False)
+        self._configure_window_state_refresh(False)
         super().hideEvent(event)
 
     def _schedule_initial_refresh(self) -> None:
@@ -1750,9 +1429,19 @@ class MainWindow(QMainWindow):
         self._overlay_controls_syncing = True
         self._overlay_groups_list.clear()
         for group in groups:
-            item = QListWidgetItem(group.name)
+            count = len(group.assigned_window_ids)
+            count_key = (
+                "dialog.choose_overlay_group.count_one"
+                if count == 1
+                else "dialog.choose_overlay_group.count_many"
+            )
+            item = QListWidgetItem(f"{group.name}\n{tr(count_key, count=count)}")
             item.setData(Qt.ItemDataRole.UserRole, group.id)
             item.setToolTip(group.name)
+            item.setSizeHint(QSize(0, 52))
+            swatch = QPixmap(16, 16)
+            swatch.fill(QColor(group.color))
+            item.setIcon(QIcon(swatch))
             self._overlay_groups_list.addItem(item)
         self._selected_overlay_group_id = self._valid_overlay_group_id(
             self._selected_overlay_group_id
@@ -1763,6 +1452,7 @@ class MainWindow(QMainWindow):
                 selected_row = row
                 break
         self._overlay_groups_list.setCurrentRow(selected_row)
+        self._overlay_empty_label.setText(tr("empty.overlay_groups"))
         self._overlay_empty_label.setVisible(not groups)
         self._overlay_groups_list.setVisible(bool(groups))
         self._overlay_controls_syncing = False
@@ -1791,17 +1481,45 @@ class MainWindow(QMainWindow):
         self._overlay_opacity_spin.setEnabled(enabled)
         self._overlay_corner_radius_spin.setEnabled(enabled)
         self._overlay_hover_delay_spin.setEnabled(enabled)
+        self._overlay_marker_width_slider.setEnabled(enabled)
+        self._overlay_marker_height_slider.setEnabled(enabled)
+        self._overlay_opacity_slider.setEnabled(enabled)
+        self._overlay_corner_radius_slider.setEnabled(enabled)
+        self._overlay_hover_delay_slider.setEnabled(enabled)
+        self._overlay_marker_spacing_slider.setEnabled(True)
+        self._overlay_marker_spacing_spin.setEnabled(True)
+        self._overlay_hub_opacity_slider.setEnabled(True)
+        self._overlay_hub_opacity_spin.setEnabled(True)
         self._overlay_locked_position_checkbox.setEnabled(enabled)
         self._overlay_hide_fullscreen_checkbox.setEnabled(enabled)
         self._overlay_quick_controls_checkbox.setEnabled(enabled)
         self._overlay_reset_position_button.setEnabled(enabled)
         self._overlay_delete_button.setEnabled(enabled)
+        self._overlay_use_hub_checkbox.setChecked(self._settings.overlay_use_unified_hub)
+        self._overlay_individual_markers_checkbox.setChecked(
+            self._settings.overlay_use_individual_markers
+        )
+        self._overlay_replace_markers_checkbox.setChecked(
+            self._settings.overlay_replace_individual_markers
+        )
+        self._overlay_hub_always_visible_checkbox.setChecked(
+            self._settings.overlay_hub_always_visible
+        )
+        self._overlay_hub_auto_hide_checkbox.setChecked(
+            self._settings.overlay_hub_auto_hide
+        )
+        self._overlay_auto_snap_checkbox.setChecked(
+            self._settings.overlay_auto_snap_to_taskbar
+        )
+        self._overlay_compact_mode_checkbox.setChecked(self._settings.overlay_compact_mode)
+        self._overlay_marker_spacing_spin.setValue(self._settings.overlay_marker_spacing)
+        self._overlay_hub_opacity_spin.setValue(self._settings.overlay_hub_opacity)
         if group is None:
             self._overlay_name_edit.clear()
-            self._overlay_marker_width_spin.setValue(10)
-            self._overlay_marker_height_spin.setValue(88)
-            self._overlay_opacity_spin.setValue(0.95)
-            self._overlay_corner_radius_spin.setValue(6)
+            self._overlay_marker_width_spin.setValue(8)
+            self._overlay_marker_height_spin.setValue(64)
+            self._overlay_opacity_spin.setValue(0.9)
+            self._overlay_corner_radius_spin.setValue(8)
             self._overlay_hover_delay_spin.setValue(1200)
             self._overlay_locked_position_checkbox.setChecked(False)
             self._overlay_hide_fullscreen_checkbox.setChecked(True)
@@ -1818,9 +1536,12 @@ class MainWindow(QMainWindow):
             self._overlay_hide_fullscreen_checkbox.setChecked(group.hide_during_fullscreen)
             self._overlay_quick_controls_checkbox.setChecked(group.show_quick_controls)
             self._update_overlay_color_button(group.color)
+        self._update_overlay_preview(group)
         self._overlay_controls_syncing = False
 
     def _set_overlay_groups_enabled(self, enabled: bool) -> None:
+        if self._settings_controls_syncing or self._overlay_controls_syncing:
+            return
         self._settings.overlay_groups_enabled = enabled
         self._persist_overlay_groups("overlay groups enabled changed")
 
@@ -1831,7 +1552,7 @@ class MainWindow(QMainWindow):
         self._selected_overlay_group_id = group.id
         self._populate_overlay_groups_list()
         self._persist_overlay_groups("overlay group created")
-        self.statusBar().showMessage(tr("status.overlay_group_created"))
+        self._show_status(tr("status.overlay_group_created"), kind=NotificationKind.OVERLAY)
 
     def _prompt_create_overlay_group(self) -> OverlayGroup | None:
         name, accepted = QInputDialog.getText(
@@ -1859,19 +1580,12 @@ class MainWindow(QMainWindow):
                 return None
             return self._prompt_create_overlay_group()
 
-        names = [group.name for group in groups]
-        selected_name, accepted = QInputDialog.getItem(
-            self,
-            tr("dialog.choose_overlay_group.title"),
-            tr("dialog.choose_overlay_group.message"),
-            names,
-            0,
-            False,
-        )
-        if not accepted:
+        dialog = OverlayGroupChoiceDialog(groups, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
+        selected_group_id = dialog.selected_group_id
         for group in groups:
-            if group.name == selected_name:
+            if group.id == selected_group_id:
                 return group
         return None
 
@@ -1893,7 +1607,7 @@ class MainWindow(QMainWindow):
         self._selected_overlay_group_id = updated.id
         self._populate_overlay_groups_list()
         self._persist_overlay_groups("overlay group renamed")
-        self.statusBar().showMessage(tr("status.overlay_group_updated"))
+        self._show_status(tr("status.overlay_group_updated"), kind=NotificationKind.OVERLAY)
 
     def _update_overlay_numeric_settings(self) -> None:
         if self._overlay_controls_syncing:
@@ -1901,7 +1615,7 @@ class MainWindow(QMainWindow):
         group = self._selected_overlay_group()
         if group is None:
             return
-        self._overlay_group_service.update_group(
+        updated = self._overlay_group_service.update_group(
             group.id,
             marker_width=self._overlay_marker_width_spin.value(),
             marker_height=self._overlay_marker_height_spin.value(),
@@ -1909,6 +1623,7 @@ class MainWindow(QMainWindow):
             corner_radius=self._overlay_corner_radius_spin.value(),
             hover_delay_ms=self._overlay_hover_delay_spin.value(),
         )
+        self._update_overlay_preview(updated)
         self._persist_overlay_groups("overlay group numeric settings changed")
 
     def _update_overlay_boolean_settings(self) -> None:
@@ -1917,13 +1632,39 @@ class MainWindow(QMainWindow):
         group = self._selected_overlay_group()
         if group is None:
             return
-        self._overlay_group_service.update_group(
+        updated = self._overlay_group_service.update_group(
             group.id,
             locked_position=self._overlay_locked_position_checkbox.isChecked(),
             hide_during_fullscreen=self._overlay_hide_fullscreen_checkbox.isChecked(),
             show_quick_controls=self._overlay_quick_controls_checkbox.isChecked(),
         )
+        self._update_overlay_preview(updated)
         self._persist_overlay_groups("overlay group behavior changed")
+
+    def _update_overlay_display_settings(self) -> None:
+        if self._settings_controls_syncing or self._overlay_controls_syncing:
+            return
+        self._settings.overlay_use_unified_hub = self._overlay_use_hub_checkbox.isChecked()
+        self._settings.overlay_use_individual_markers = (
+            self._overlay_individual_markers_checkbox.isChecked()
+        )
+        self._settings.overlay_replace_individual_markers = (
+            self._overlay_replace_markers_checkbox.isChecked()
+        )
+        self._settings.overlay_hub_always_visible = (
+            self._overlay_hub_always_visible_checkbox.isChecked()
+        )
+        self._settings.overlay_hub_auto_hide = (
+            self._overlay_hub_auto_hide_checkbox.isChecked()
+        )
+        self._settings.overlay_auto_snap_to_taskbar = self._overlay_auto_snap_checkbox.isChecked()
+        self._settings.overlay_compact_mode = self._overlay_compact_mode_checkbox.isChecked()
+        self._settings.overlay_marker_spacing = self._overlay_marker_spacing_spin.value()
+        self._settings.overlay_hub_opacity = self._overlay_hub_opacity_spin.value()
+        self._settings_store.save(self._settings, reason="overlay display settings changed")
+        self._sync_overlay_markers()
+        self._update_overlay_preview()
+        self._show_status(tr("status.overlay_group_updated"), kind=NotificationKind.OVERLAY)
 
     def _choose_overlay_color(self) -> None:
         group = self._selected_overlay_group()
@@ -1940,9 +1681,9 @@ class MainWindow(QMainWindow):
             return
         updated = self._overlay_group_service.update_color(group.id, color.name())
         self._selected_overlay_group_id = updated.id
-        self._sync_overlay_group_controls()
+        self._populate_overlay_groups_list()
         self._persist_overlay_groups("overlay group color changed")
-        self.statusBar().showMessage(tr("status.overlay_group_updated"))
+        self._show_status(tr("status.overlay_group_updated"), kind=NotificationKind.OVERLAY)
 
     def _reset_overlay_marker_position(self) -> None:
         group = self._selected_overlay_group()
@@ -1950,7 +1691,10 @@ class MainWindow(QMainWindow):
             return
         self._overlay_group_service.update_group(group.id, position_by_monitor={})
         self._persist_overlay_groups("overlay group marker position reset")
-        self.statusBar().showMessage(tr("status.overlay_group_position_reset"))
+        self._show_status(
+            tr("status.overlay_group_position_reset"),
+            kind=NotificationKind.OVERLAY,
+        )
 
     def _delete_selected_overlay_group(self) -> None:
         group = self._selected_overlay_group()
@@ -1971,7 +1715,7 @@ class MainWindow(QMainWindow):
         self._selected_overlay_group_id = self._valid_overlay_group_id("")
         self._populate_overlay_groups_list()
         self._persist_overlay_groups("overlay group deleted")
-        self.statusBar().showMessage(tr("status.overlay_group_deleted"))
+        self._show_status(tr("status.overlay_group_deleted"), kind=NotificationKind.OVERLAY)
 
     def _update_overlay_color_button(self, color: str) -> None:
         self._overlay_color_button.setText(color)
@@ -1987,6 +1731,23 @@ class MainWindow(QMainWindow):
     def _persist_overlay_groups(self, reason: str) -> None:
         self._settings.overlay_groups_enabled = self._overlay_enabled_checkbox.isChecked()
         self._settings.selected_overlay_group_id = self._selected_overlay_group_id
+        self._settings.overlay_use_unified_hub = self._overlay_use_hub_checkbox.isChecked()
+        self._settings.overlay_use_individual_markers = (
+            self._overlay_individual_markers_checkbox.isChecked()
+        )
+        self._settings.overlay_replace_individual_markers = (
+            self._overlay_replace_markers_checkbox.isChecked()
+        )
+        self._settings.overlay_hub_always_visible = (
+            self._overlay_hub_always_visible_checkbox.isChecked()
+        )
+        self._settings.overlay_hub_auto_hide = (
+            self._overlay_hub_auto_hide_checkbox.isChecked()
+        )
+        self._settings.overlay_auto_snap_to_taskbar = self._overlay_auto_snap_checkbox.isChecked()
+        self._settings.overlay_compact_mode = self._overlay_compact_mode_checkbox.isChecked()
+        self._settings.overlay_marker_spacing = self._overlay_marker_spacing_spin.value()
+        self._settings.overlay_hub_opacity = self._overlay_hub_opacity_spin.value()
         self._settings.overlay_groups = [
             asdict(group)
             for group in self._overlay_group_service.groups()
@@ -2029,6 +1790,29 @@ class MainWindow(QMainWindow):
             edge,
         )
 
+    def _save_overlay_hub_position(
+        self,
+        monitor_id: str,
+        x: int,
+        y: int,
+        edge: str,
+    ) -> None:
+        positions = {
+            key: dict(value)
+            for key, value in self._settings.overlay_hub_position_by_monitor.items()
+        }
+        positions[monitor_id] = {"x": x, "y": y, "edge": edge}
+        self._settings.overlay_hub_position_by_monitor = positions
+        self._settings_store.save(self._settings, reason="overlay hub position saved")
+        self._sync_overlay_markers()
+        LOGGER.info(
+            "Overlay hub position saved: monitor=%s x=%s y=%s edge=%s",
+            monitor_id,
+            x,
+            y,
+            edge,
+        )
+
     def _set_overlay_group_locked(self, group_id: str, locked: bool) -> None:
         try:
             self._overlay_group_service.update_group(group_id, locked_position=locked)
@@ -2050,6 +1834,20 @@ class MainWindow(QMainWindow):
         self._overlay_marker_manager.sync(
             list(self._overlay_group_service.groups()),
             enabled=self._settings.overlay_groups_enabled,
+            display_config=OverlayDisplayConfig(
+                use_unified_hub=self._settings.overlay_use_unified_hub,
+                use_individual_markers=self._settings.overlay_use_individual_markers,
+                replace_individual_markers=(
+                    self._settings.overlay_replace_individual_markers
+                ),
+                auto_snap_to_taskbar=self._settings.overlay_auto_snap_to_taskbar,
+                compact_mode=self._settings.overlay_compact_mode,
+                marker_spacing=self._settings.overlay_marker_spacing,
+                hub_always_visible=self._settings.overlay_hub_always_visible,
+                hub_auto_hide=self._settings.overlay_hub_auto_hide,
+                hub_opacity=self._settings.overlay_hub_opacity,
+                hub_position_by_monitor=self._settings.overlay_hub_position_by_monitor,
+            ),
         )
 
     def _overlay_popup_items(self, group: OverlayGroup) -> list[OverlayPopupItem]:
@@ -2095,7 +1893,10 @@ class MainWindow(QMainWindow):
     def _restore_overlay_group_windows(self, group_id: str) -> None:
         handles = self._overlay_hidden_handles(group_id)
         if not handles:
-            self.statusBar().showMessage(tr("status.overlay_group_no_hidden_windows"))
+            self._show_status(
+                tr("status.overlay_group_no_hidden_windows"),
+                kind=NotificationKind.OVERLAY,
+            )
             return
         self._restore_handles(handles)
         self._sync_overlay_markers()
@@ -2109,7 +1910,10 @@ class MainWindow(QMainWindow):
             if window.handle in assigned and window.handle not in hidden
         ]
         if not handles:
-            self.statusBar().showMessage(tr("status.overlay_group_no_open_windows"))
+            self._show_status(
+                tr("status.overlay_group_no_open_windows"),
+                kind=NotificationKind.OVERLAY,
+            )
             return
 
         self._set_loading(True, tr("status.loading_hiding"))
@@ -2125,8 +1929,9 @@ class MainWindow(QMainWindow):
                 self._sync_recovery_state("overlay group window hidden")
             self._persist_managed_state("overlay group windows hidden")
             self._refresh()
-            self.statusBar().showMessage(
-                tr("status.overlay_group_hidden_count", count=hidden_count)
+            self._show_status(
+                tr("status.overlay_group_hidden_count", count=hidden_count),
+                kind=NotificationKind.OVERLAY,
             )
         except ShelfyGAIError as exc:
             LOGGER.exception("Overlay group hide-all failed")
@@ -2144,7 +1949,7 @@ class MainWindow(QMainWindow):
             self._show_error(str(exc))
             return
         self._persist_overlay_groups("window removed from overlay group")
-        self.statusBar().showMessage(tr("status.overlay_window_removed"))
+        self._show_status(tr("status.overlay_window_removed"), kind=NotificationKind.OVERLAY)
 
     def _open_from_overlay_popup(self) -> None:
         self._show_from_tray()
@@ -2154,15 +1959,10 @@ class MainWindow(QMainWindow):
         self._clear_layout(self._groups_layout)
         self._group_buttons.clear()
         counts = self._shelf_service.group_counts()
-        group_windows: dict[str, list[WindowInfo]] = {}
-        for item in self._shelf_service.shelved_items():
-            group_windows.setdefault(item.group_id, []).append(item.window)
         for group in self._shelf_service.groups():
             count = counts.get(group.id, 0)
             button = GroupButton(group.id, f"{self._group_display_name(group)} ({count})")
             button.setObjectName("GroupButton")
-            button.setIcon(self._icon_provider.group_icon(group_windows.get(group.id, [])))
-            button.setIconSize(QSize(18, 18))
             button.clicked.connect(
                 lambda _checked=False, group_id=group.id: self._select_group(group_id)
             )
@@ -2262,7 +2062,7 @@ class MainWindow(QMainWindow):
                 self._persist_managed_state("window assigned to group")
                 self._refresh()
                 self._show_page(3)
-                self.statusBar().showMessage(tr("status.moved_to_group"))
+                self._show_status(tr("status.moved_to_group"), kind=NotificationKind.OVERLAY)
         except ShelfyGAIError as exc:
             self._show_error(str(exc))
 
@@ -2291,15 +2091,30 @@ class MainWindow(QMainWindow):
         self._restore_handles(handles)
 
     def _group_taskbar_placeholder(self) -> None:
-        self.statusBar().showMessage(tr("status.group_taskbar_placeholder"))
+        self._show_status(tr("status.group_taskbar_placeholder"))
 
     def _set_loading(self, enabled: bool, message: str = "") -> None:
         self._loading_label.setText(message)
         self._loading_label.setVisible(enabled)
         if enabled:
-            self.statusBar().showMessage(message)
+            self._show_status(message)
 
-    def _refresh(self, _checked: bool = False, *, reason: str = "manual") -> None:
+    def _request_refresh(self, _checked: bool = False, *, reason: str = "manual") -> None:
+        self._pending_refresh_reason = reason
+        self._refresh_debounce_timer.start()
+
+    def _run_debounced_refresh(self) -> None:
+        reason = self._pending_refresh_reason or "manual"
+        self._pending_refresh_reason = None
+        self._refresh(reason=reason)
+
+    def _refresh(
+        self,
+        _checked: bool = False,
+        *,
+        reason: str = "manual",
+        sync_overlays: bool = True,
+    ) -> None:
         refresh_started = perf_counter()
         self._set_loading(True, tr("status.loading_refreshing"))
         try:
@@ -2334,7 +2149,7 @@ class MainWindow(QMainWindow):
 
             available_count = self._available_table.rowCount()
             shelf_count = self._shelf_table.rowCount()
-            self.statusBar().showMessage(
+            self._show_status(
                 tr(
                     "status.refresh_counts",
                     available=available_count,
@@ -2343,7 +2158,9 @@ class MainWindow(QMainWindow):
                 )
             )
             self._sync_tray_actions()
-            self._sync_overlay_markers()
+            if sync_overlays:
+                self._sync_overlay_markers()
+            self._configure_window_state_refresh()
             icon_stats = self._icon_provider.cache_stats()
             log_performance(
                 "refresh",
@@ -2380,6 +2197,7 @@ class MainWindow(QMainWindow):
     def _populate_available(self, windows: Sequence[WindowInfo]) -> None:
         self._populate_table(self._available_table, windows)
         self._apply_open_windows_filter()
+        self._refresh_window_states()
         self._update_selected_window_card()
 
     def _prune_stale_overlay_group_entries(
@@ -2512,8 +2330,6 @@ class MainWindow(QMainWindow):
                 window.title,
                 window.process_id,
                 window.executable_path or "",
-                window.is_minimized,
-                self._window_state_text(table, window),
             )
             for window in windows
         )
@@ -2527,11 +2343,12 @@ class MainWindow(QMainWindow):
 
         try:
             for row, window in enumerate(windows):
+                state_key = self._window_state_key(table, window)
                 values = [
                     "",
                     window.process_name,
                     window.title,
-                    self._window_state_text(table, window),
+                    tr(state_key),
                 ]
                 filter_text = " ".join(
                     [
@@ -2546,6 +2363,7 @@ class MainWindow(QMainWindow):
                     item.setData(HANDLE_ROLE, window.handle)
                     item.setData(EXE_PATH_ROLE, window.executable_path or "")
                     item.setData(FILTER_ROLE, filter_text)
+                    item.setData(STATE_KEY_ROLE, state_key)
                     item.setToolTip(value)
                     if column == 0:
                         item.setIcon(self._icon_for_window(window, queue=False))
@@ -2555,17 +2373,133 @@ class MainWindow(QMainWindow):
                         )
                     table.setItem(row, column, item)
         finally:
-            table.setSortingEnabled(True)
+            table.setSortingEnabled(False)
+            table.horizontalHeader().setSortIndicatorShown(False)
             table.setUpdatesEnabled(True)
 
+    def _window_state_key(self, table: QTableWidget, window: WindowInfo) -> str:
+        return self._state_key_for_table(
+            table,
+            handle=window.handle,
+            is_minimized=window.is_minimized,
+        )
+
+    def _state_key_for_table(
+        self,
+        table: QTableWidget,
+        *,
+        handle: int,
+        is_minimized: bool,
+    ) -> str:
+        if table in (self._shelf_table, self._group_table):
+            return window_state_key(is_hidden=True)
+        return window_state_key(
+            is_pinned=table is self._pinned_table or self._is_pinned_handle(handle),
+            is_minimized=is_minimized,
+        )
+
     def _window_state_text(self, table: QTableWidget, window: WindowInfo) -> str:
-        if table is self._available_table:
-            if self._is_pinned_handle(window.handle):
-                return tr("state.pinned")
-            return tr("state.minimized" if window.is_minimized else "state.open")
-        if table is self._pinned_table:
-            return tr("state.pinned")
-        return tr("state.on_shelf")
+        return tr(self._window_state_key(table, window))
+
+    def _refresh_window_states(self) -> None:
+        if not self._should_run_window_state_refresh():
+            self._configure_window_state_refresh(False)
+            return
+
+        selected_handle = self._first_selected_handle(self._available_table)
+        changed_selected = False
+        missing_handles: set[int] = set()
+        updated_states: dict[int, bool] = {}
+
+        for row in range(self._available_table.rowCount()):
+            item = self._available_table.item(row, 0)
+            if item is None:
+                continue
+            handle = item.data(HANDLE_ROLE)
+            if not isinstance(handle, int):
+                continue
+            try:
+                is_minimized = self._shelf_service.window_is_minimized(handle)
+            except ShelfyGAIError:
+                missing_handles.add(handle)
+                continue
+            except Exception:
+                LOGGER.debug(
+                    "Could not refresh lightweight window state: hwnd=%s",
+                    handle,
+                    exc_info=True,
+                )
+                missing_handles.add(handle)
+                continue
+
+            updated_states[handle] = is_minimized
+            new_key = self._state_key_for_table(
+                self._available_table,
+                handle=handle,
+                is_minimized=is_minimized,
+            )
+            if self._update_table_row_state(self._available_table, row, new_key):
+                changed_selected = changed_selected or handle == selected_handle
+
+        if updated_states:
+            self._last_available_windows = tuple(
+                replace(window, is_minimized=updated_states.get(window.handle, window.is_minimized))
+                for window in self._last_available_windows
+            )
+
+        if changed_selected:
+            self._update_selected_window_card()
+
+        if missing_handles:
+            LOGGER.debug(
+                "Scheduling full refresh after missing lightweight state handles: hwnds=%s",
+                sorted(missing_handles),
+            )
+            self._request_refresh(reason="window state cleanup")
+
+    def _update_table_row_state(
+        self,
+        table: QTableWidget,
+        row: int,
+        state_key: str,
+    ) -> bool:
+        item = table.item(row, 3)
+        if item is None:
+            return False
+        previous_key = item.data(STATE_KEY_ROLE)
+        if previous_key == state_key:
+            return False
+        handle_item = table.item(row, 0)
+        handle = handle_item.data(HANDLE_ROLE) if handle_item is not None else None
+        previous_text = item.text()
+        new_text = tr(state_key)
+        item.setText(new_text)
+        item.setToolTip(new_text)
+        item.setData(STATE_KEY_ROLE, state_key)
+        LOGGER.info(
+            "Window state changed: hwnd=%s previous_state=%s new_state=%s",
+            handle,
+            previous_text,
+            new_text,
+        )
+        return True
+
+    def _refresh_table_state_translations(self) -> None:
+        for table in (
+            self._available_table,
+            self._shelf_table,
+            self._pinned_table,
+            self._group_table,
+        ):
+            for row in range(table.rowCount()):
+                item = table.item(row, 3)
+                if item is None:
+                    continue
+                state_key = item.data(STATE_KEY_ROLE)
+                if isinstance(state_key, str):
+                    text = tr(state_key)
+                    item.setText(text)
+                    item.setToolTip(text)
 
     def _refresh_cached_icons(self) -> None:
         self._apply_table_icons(self._available_table, visible_only=True)
@@ -2614,7 +2548,7 @@ class MainWindow(QMainWindow):
     def _update_table_empty_state(
         self,
         table: QTableWidget,
-        label: QLabel,
+        label: QWidget,
         message: str,
         *,
         visible_count: int | None = None,
@@ -2622,7 +2556,29 @@ class MainWindow(QMainWindow):
         label.setText(message)
         if visible_count is None:
             visible_count = self._visible_row_count(table)
-        label.setVisible(visible_count == 0)
+        has_rows = visible_count > 0
+        table.setVisible(has_rows)
+        label.setVisible(not has_rows)
+
+    def _refresh_empty_states(self) -> None:
+        self._apply_open_windows_filter()
+        self._update_table_empty_state(
+            self._shelf_table,
+            self._shelf_empty_label,
+            tr("empty.managed_windows"),
+        )
+        self._update_table_empty_state(
+            self._pinned_table,
+            self._pinned_empty_label,
+            tr("empty.pinned_windows"),
+        )
+        group = self._group_by_id(self._selected_group_id)
+        self._update_table_empty_state(
+            self._group_table,
+            self._group_empty_label,
+            tr("empty.group_windows", group=self._group_display_name(group)),
+        )
+        self._overlay_empty_label.setText(tr("empty.overlay_groups"))
 
     def _visible_row_count(self, table: QTableWidget) -> int:
         return sum(1 for row in range(table.rowCount()) if not table.isRowHidden(row))
@@ -2638,7 +2594,7 @@ class MainWindow(QMainWindow):
             if enabled
             else "status.open_auto_refresh.disabled"
         )
-        self.statusBar().showMessage(
+        self._show_status(
             tr("status.open_auto_refresh", state=tr(state_key))
         )
 
@@ -2703,6 +2659,22 @@ class MainWindow(QMainWindow):
             return
         self._settings.startup_notification_enabled = enabled
         self._save_runtime_settings("startup notification changed")
+
+    def _set_notification_settings(self, _enabled: bool) -> None:
+        if self._settings_controls_syncing:
+            return
+        self._settings.notifications_enabled = self._notifications_enabled_checkbox.isChecked()
+        self._settings.show_tray_notifications = self._tray_notifications_checkbox.isChecked()
+        self._settings.show_overlay_notifications = (
+            self._overlay_notifications_checkbox.isChecked()
+        )
+        self._settings.show_restore_notifications = (
+            self._restore_notifications_checkbox.isChecked()
+        )
+        self._settings.show_pin_unpin_notifications = self._pin_notifications_checkbox.isChecked()
+        self._settings.silent_mode = self._silent_mode_checkbox.isChecked()
+        self._sync_notification_control_state()
+        self._save_runtime_settings("notification settings changed")
 
     def _set_debug_mode(self, enabled: bool) -> None:
         if self._settings_controls_syncing:
@@ -2792,11 +2764,27 @@ class MainWindow(QMainWindow):
         else:
             self._open_windows_refresh_timer.stop()
 
+    def _configure_window_state_refresh(self, enabled: bool | None = None) -> None:
+        should_run = self._should_run_window_state_refresh() if enabled is None else enabled
+        if should_run:
+            self._window_state_refresh_timer.start()
+        else:
+            self._window_state_refresh_timer.stop()
+
     def _should_run_open_windows_auto_refresh(self) -> bool:
         return (
             self._settings.open_windows_auto_refresh
             and self.isVisible()
             and self._stack.currentIndex() == 0
+            and not self._is_quitting
+        )
+
+    def _should_run_window_state_refresh(self) -> bool:
+        return (
+            self.isVisible()
+            and self._stack.currentIndex() == 0
+            and self._available_table.rowCount() > 0
+            and not self._is_quitting
         )
 
     def _configure_pinned_watcher(self) -> None:
@@ -2817,6 +2805,10 @@ class MainWindow(QMainWindow):
             count += 1
         if self._open_windows_filter_timer.isActive():
             count += 1
+        if self._window_state_refresh_timer.isActive():
+            count += 1
+        if self._refresh_debounce_timer.isActive():
+            count += 1
         if self._pinned_watcher_timer.isActive():
             count += 1
         if self._overlay_marker_manager.fullscreen_watcher_active():
@@ -2830,13 +2822,19 @@ class MainWindow(QMainWindow):
             restored, removed = self._shelf_service.enforce_pinned_windows()
         except Exception:
             LOGGER.exception("Pinned-window watcher failed")
-            self.statusBar().showMessage(tr("error.pinned_watcher"))
+            self._show_status(tr("error.pinned_watcher"), kind=NotificationKind.PIN)
             return
         if removed:
             self._refresh(reason="pinned watcher")
-            self.statusBar().showMessage(tr("status.pinned_removed_closed", count=removed))
+            self._show_status(
+                tr("status.pinned_removed_closed", count=removed),
+                kind=NotificationKind.PIN,
+            )
         elif restored:
-            self.statusBar().showMessage(tr("status.pinned_restored", count=restored))
+            self._show_status(
+                tr("status.pinned_restored", count=restored),
+                kind=NotificationKind.PIN,
+            )
         self._configure_pinned_watcher()
 
     def _selected_handles(self, table: QTableWidget) -> list[int]:
@@ -2881,10 +2879,11 @@ class MainWindow(QMainWindow):
 
     def _show_hide_pinned_message(self) -> None:
         message = tr("error.hide_pinned_window")
-        self.statusBar().showMessage(message)
+        self._show_status(message, kind=NotificationKind.PIN)
         self._tray_notify(
             tr("error.notification.title"),
             message,
+            kind=NotificationKind.PIN,
             icon=QSystemTrayIcon.MessageIcon.Warning,
             duration_ms=5_000,
         )
@@ -2903,10 +2902,7 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
         if table is self._available_table:
-            pin_action = menu.addAction(
-                self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp),
-                tr("action.pin_window"),
-            )
+            pin_action = menu.addAction(tr("action.pin_window"))
             pin_action.triggered.connect(lambda _checked=False: self._pin_handles(handles))
             prevent_action = menu.addAction(tr("action.prevent_minimize"))
             prevent_action.triggered.connect(
@@ -2983,7 +2979,7 @@ class MainWindow(QMainWindow):
     def _pin_selected(self) -> None:
         handles = self._selected_handles(self._available_table)
         if not handles:
-            self.statusBar().showMessage(tr("status.select_open_pin"))
+            self._show_status(tr("status.select_open_pin"), kind=NotificationKind.PIN)
             return
         self._pin_handles(handles)
 
@@ -3003,10 +2999,14 @@ class MainWindow(QMainWindow):
                 pinned_count += 1
                 self._sync_recovery_state("window pinned")
             self._refresh(reason="windows pinned")
-            self.statusBar().showMessage(tr("status.pinned_count", count=pinned_count))
+            self._show_status(
+                tr("status.pinned_count", count=pinned_count),
+                kind=NotificationKind.PIN,
+            )
             self._tray_notify(
                 tr("tray.notification.pinned.title"),
                 tr("tray.notification.pinned.message", count=pinned_count),
+                kind=NotificationKind.PIN,
             )
             return pinned_count
         except ShelfyGAIError as exc:
@@ -3026,14 +3026,14 @@ class MainWindow(QMainWindow):
     def _unpin_selected(self) -> None:
         handles = self._selected_handles(self._pinned_table)
         if not handles:
-            self.statusBar().showMessage(tr("status.select_pinned_unpin"))
+            self._show_status(tr("status.select_pinned_unpin"), kind=NotificationKind.PIN)
             return
         self._unpin_handles(handles)
 
     def _move_pinned_selection(self, direction: int) -> None:
         handle = self._first_selected_handle(self._pinned_table)
         if handle is None:
-            self.statusBar().showMessage(tr("status.select_pinned_unpin"))
+            self._show_status(tr("status.select_pinned_unpin"), kind=NotificationKind.PIN)
             return
         reordered = move_handle(self._pinned_order, handle, direction)
         if reordered == self._pinned_order:
@@ -3041,26 +3041,26 @@ class MainWindow(QMainWindow):
         self._pinned_order = reordered
         self._populate_pinned(self._last_pinned_items)
         self._select_table_handle(self._pinned_table, handle)
-        self.statusBar().showMessage(tr("status.pinned_order_changed"))
+        self._show_status(tr("status.pinned_order_changed"), kind=NotificationKind.PIN)
 
     def _bring_pinned_selection_to_front(self) -> None:
         handle = self._first_selected_handle(self._pinned_table)
         if handle is None:
-            self.statusBar().showMessage(tr("status.select_pinned_unpin"))
+            self._show_status(tr("status.select_pinned_unpin"), kind=NotificationKind.PIN)
             return
         self._bring_pinned_handles_to_front([handle])
 
     def _bring_pinned_handles_to_front(self, handles: list[int]) -> None:
         pinned_handles = [handle for handle in handles if handle in self._pinned_order]
         if not pinned_handles:
-            self.statusBar().showMessage(tr("status.select_pinned_unpin"))
+            self._show_status(tr("status.select_pinned_unpin"), kind=NotificationKind.PIN)
             return
         handle = pinned_handles[0]
         self._pinned_order = bring_handle_to_front(self._pinned_order, handle)
         self._populate_pinned(self._last_pinned_items)
         self._select_table_handle(self._pinned_table, handle)
         self._bring_handles_forward([handle])
-        self.statusBar().showMessage(tr("status.pinned_order_changed"))
+        self._show_status(tr("status.pinned_order_changed"), kind=NotificationKind.PIN)
 
     def _apply_pinned_z_order(self) -> None:
         if not self._pinned_order:
@@ -3086,10 +3086,15 @@ class MainWindow(QMainWindow):
                     skipped += 1
             self._sync_recovery_state("windows unpinned")
             self._refresh(reason="windows unpinned")
-            self.statusBar().showMessage(self._unpin_summary(unpinned, skipped))
+            self._configure_pinned_watcher()
+            self._show_status(
+                self._unpin_summary(unpinned, skipped),
+                kind=NotificationKind.PIN,
+            )
             self._tray_notify(
                 tr("tray.notification.unpinned.title"),
                 self._unpin_summary(unpinned, skipped),
+                kind=NotificationKind.PIN,
             )
         except ShelfyGAIError as exc:
             LOGGER.exception("Unpin failed")
@@ -3105,6 +3110,68 @@ class MainWindow(QMainWindow):
             self._set_loading(False)
         return unpinned, skipped
 
+    def _unpin_all(
+        self,
+        _checked: bool = False,
+        *,
+        confirm: bool = True,
+    ) -> None:
+        if not self._shelf_service.has_pinned_windows():
+            self._show_status(tr("status.no_pinned_unpin"), kind=NotificationKind.PIN)
+            return
+
+        if confirm:
+            answer = QMessageBox.question(
+                self,
+                tr("dialog.unpin_all.title"),
+                tr("dialog.unpin_all.message"),
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        self._set_loading(True, tr("status.loading_unpinning"))
+        pinned_before = [item.window.handle for item in self._shelf_service.pinned_items()]
+        LOGGER.info(
+            "Unpin all requested from UI: pinned_count=%s hwnds=%s",
+            len(pinned_before),
+            pinned_before,
+        )
+        try:
+            unpinned, skipped = self._shelf_service.unpin_all()
+            pinned_after = {item.window.handle for item in self._shelf_service.pinned_items()}
+            unpinned_handles = [
+                handle for handle in pinned_before if handle not in pinned_after
+            ]
+            LOGGER.info(
+                "Unpin all completed from UI: unpinned=%s skipped=%s "
+                "unpinned_hwnds=%s",
+                unpinned,
+                skipped,
+                unpinned_handles,
+            )
+            self._pinned_order = [
+                handle for handle in self._pinned_order if handle in pinned_after
+            ]
+            self._configure_pinned_watcher()
+            self._sync_recovery_state("all windows unpinned")
+            self._refresh(reason="all windows unpinned")
+            self._sync_tray_actions()
+            message = self._unpin_summary(unpinned, skipped)
+            self._show_status(message, kind=NotificationKind.PIN)
+            self._tray_notify(
+                tr("tray.notification.unpinned.title"),
+                message,
+                kind=NotificationKind.PIN,
+            )
+        except ShelfyGAIError as exc:
+            LOGGER.exception("Unpin all failed")
+            self._show_error(str(exc))
+        except Exception:
+            LOGGER.exception("Unexpected unpin-all failure")
+            self._show_error(tr("error.unpin_all"))
+        finally:
+            self._set_loading(False)
+
     def _copy_pin_diagnostics(self, handles: list[int]) -> None:
         if not handles:
             return
@@ -3115,7 +3182,7 @@ class MainWindow(QMainWindow):
             ]
             clipboard = QApplication.clipboard()
             clipboard.setText("\n\n---\n\n".join(diagnostics))
-            self.statusBar().showMessage(
+            self._show_status(
                 tr("status.pin_diagnostics_copied", count=len(handles))
             )
         except Exception:
@@ -3149,7 +3216,7 @@ class MainWindow(QMainWindow):
                 if enabled
                 else "status.prevent_minimize_disabled"
             )
-            self.statusBar().showMessage(tr(status_key, count=updated))
+            self._show_status(tr(status_key, count=updated), kind=NotificationKind.PIN)
         except ShelfyGAIError as exc:
             LOGGER.exception("Prevent-minimize update failed")
             self._show_error(str(exc))
@@ -3160,7 +3227,7 @@ class MainWindow(QMainWindow):
     def _add_selected_to_overlay_group(self) -> None:
         handles = self._selected_handles(self._available_table)
         if not handles:
-            self.statusBar().showMessage(tr("status.select_open_hide"))
+            self._show_status(tr("status.select_open_hide"))
             return
         self._add_handles_to_overlay_group(handles)
 
@@ -3195,8 +3262,9 @@ class MainWindow(QMainWindow):
             self._selected_overlay_group_id = group.id
             self._persist_managed_state("windows added to overlay group")
             self._refresh(reason="windows added to overlay group")
-            self.statusBar().showMessage(
-                tr("status.overlay_assigned_count", count=assigned_count)
+            self._show_status(
+                tr("status.overlay_assigned_count", count=assigned_count),
+                kind=NotificationKind.OVERLAY,
             )
             return assigned_count
         except ShelfyGAIError as exc:
@@ -3221,7 +3289,10 @@ class MainWindow(QMainWindow):
 
     def _move_hidden_handles_to_overlay_group(self, handles: list[int]) -> int:
         if not handles:
-            self.statusBar().showMessage(tr("status.select_managed_restore"))
+            self._show_status(
+                tr("status.select_managed_restore"),
+                kind=NotificationKind.OVERLAY,
+            )
             return 0
         group = self._choose_overlay_group_for_assignment()
         if group is None:
@@ -3231,8 +3302,9 @@ class MainWindow(QMainWindow):
             self._overlay_group_service.assign_window(group.id, handle)
         self._selected_overlay_group_id = group.id
         self._persist_overlay_groups("hidden windows moved to overlay group")
-        self.statusBar().showMessage(
-            tr("status.overlay_assigned_count", count=len(handles))
+        self._show_status(
+            tr("status.overlay_assigned_count", count=len(handles)),
+            kind=NotificationKind.OVERLAY,
         )
         return len(handles)
 
@@ -3242,18 +3314,22 @@ class MainWindow(QMainWindow):
 
     def _remove_handles_from_overlay_groups(self, handles: list[int]) -> int:
         if not handles:
-            self.statusBar().showMessage(tr("status.select_managed_restore"))
+            self._show_status(
+                tr("status.select_managed_restore"),
+                kind=NotificationKind.OVERLAY,
+            )
             return 0
         removed = 0
         for handle in handles:
             removed += self._overlay_group_service.remove_window_from_all(handle)
         if removed:
             self._persist_overlay_groups("windows removed from overlay groups")
-            self.statusBar().showMessage(
-                tr("status.overlay_removed_count", count=removed)
+            self._show_status(
+                tr("status.overlay_removed_count", count=removed),
+                kind=NotificationKind.OVERLAY,
             )
         else:
-            self.statusBar().showMessage(tr("status.overlay_not_assigned"))
+            self._show_status(tr("status.overlay_not_assigned"), kind=NotificationKind.OVERLAY)
         return removed
 
     def _enable_overlay_groups_for_assignment(self) -> None:
@@ -3267,7 +3343,7 @@ class MainWindow(QMainWindow):
     def _shelve_selected(self) -> None:
         handles = self._selected_handles(self._available_table)
         if not handles:
-            self.statusBar().showMessage(tr("status.select_open_hide"))
+            self._show_status(tr("status.select_open_hide"))
             return
         if self._handles_include_pinned(handles):
             self._show_hide_pinned_message()
@@ -3316,7 +3392,7 @@ class MainWindow(QMainWindow):
                 self._sync_recovery_state("window hidden")
             self._persist_managed_state(reason)
             self._refresh()
-            self.statusBar().showMessage(
+            self._show_status(
                 tr("status.hidden_count", count=hidden_count)
             )
             self._tray_notify(
@@ -3365,7 +3441,7 @@ class MainWindow(QMainWindow):
             self._sync_recovery_state("foreground window hidden by hotkey")
             self._persist_managed_state("foreground window hidden by hotkey")
             self._refresh()
-            self.statusBar().showMessage(tr("status.hidden_title", title=item.window.title))
+            self._show_status(tr("status.hidden_title", title=item.window.title))
             self._tray_notify(
                 tr("tray.notification.window_hidden.title"),
                 tr("tray.notification.window_hidden.message", title=item.window.title),
@@ -3373,7 +3449,7 @@ class MainWindow(QMainWindow):
         except ShelfyGAIError as exc:
             LOGGER.info("Global quick-hide hotkey did not hide a window: %s", exc)
             self._sync_recovery_state("quick-hide hotkey failed")
-            self.statusBar().showMessage(str(exc))
+            self._show_status(str(exc))
         except Exception:
             LOGGER.exception("Unexpected global quick-hide failure")
             self._sync_recovery_state("quick-hide hotkey failed")
@@ -3387,13 +3463,17 @@ class MainWindow(QMainWindow):
             self._persist_managed_state("last window restored by hotkey")
             self._refresh()
             if restored:
-                self.statusBar().showMessage(tr("status.last_restored"))
+                self._show_status(tr("status.last_restored"), kind=NotificationKind.RESTORE)
                 self._tray_notify(
                     tr("tray.notification.window_restored.title"),
                     tr("tray.notification.window_restored.message"),
+                    kind=NotificationKind.RESTORE,
                 )
             else:
-                self.statusBar().showMessage(tr("status.no_managed_restore"))
+                self._show_status(
+                    tr("status.no_managed_restore"),
+                    kind=NotificationKind.RESTORE,
+                )
         except ShelfyGAIError as exc:
             LOGGER.exception("Restore-last hotkey failed")
             self._show_error(str(exc))
@@ -3404,12 +3484,190 @@ class MainWindow(QMainWindow):
     def _toggle_visibility_from_hotkey(self) -> None:
         if self.isVisible() and not self.isMinimized():
             self.hide()
-            self.statusBar().showMessage(tr("status.hidden_app"))
+            self._show_status(tr("status.hidden_app"))
             LOGGER.info("Main window hidden by global hotkey")
         else:
             self._show_from_tray()
-            self.statusBar().showMessage(tr("status.shown"))
+            self._show_status(tr("status.shown"))
             LOGGER.info("Main window shown by global hotkey")
+
+    def _toggle_overlay_hub_from_hotkey(self) -> None:
+        self._sync_overlay_markers()
+        if self._overlay_marker_manager.toggle_hub_from_hotkey():
+            self._show_status(tr("status.overlay_hub_toggled"))
+            LOGGER.info("Overlay hub toggled by global hotkey")
+            return
+        self._show_status(tr("status.overlay_hub_unavailable"))
+        LOGGER.info("Overlay hub hotkey ignored because hub is unavailable")
+
+    def _pin_unpin_focused_from_hotkey(self) -> None:
+        try:
+            result, item = self._shelf_service.toggle_pin_foreground(
+                allow_own_window=self._settings.allow_pin_shelfygai_window
+            )
+            self._sync_recovery_state("focused window pin toggled by hotkey")
+            self._refresh(reason="focused window pin toggled by hotkey")
+            if result == "pinned" and item is not None:
+                self._show_status(
+                    tr("status.hotkey_focused_pinned", title=item.window.title),
+                    kind=NotificationKind.PIN,
+                )
+                self._tray_notify(
+                    tr("tray.notification.pinned.title"),
+                    tr("status.hotkey_focused_pinned", title=item.window.title),
+                    kind=NotificationKind.PIN,
+                )
+            elif result == "unpinned":
+                self._show_status(
+                    tr("status.hotkey_focused_unpinned"),
+                    kind=NotificationKind.PIN,
+                )
+                self._tray_notify(
+                    tr("tray.notification.unpinned.title"),
+                    tr("status.hotkey_focused_unpinned"),
+                    kind=NotificationKind.PIN,
+                )
+            else:
+                self._show_status(tr("status.no_pinned_unpin"), kind=NotificationKind.PIN)
+        except ShelfyGAIError as exc:
+            LOGGER.info("Pin/unpin focused hotkey did not change a window: %s", exc)
+            self._show_status(str(exc), kind=NotificationKind.PIN)
+        except Exception:
+            LOGGER.exception("Unexpected pin/unpin focused hotkey failure")
+            self._show_error(tr("error.pin"))
+
+    def _show_quick_switcher_from_hotkey(self) -> None:
+        try:
+            self._show_quick_switcher()
+        except Exception:
+            LOGGER.exception("Unexpected quick switcher hotkey failure")
+            self._show_error(tr("error.quick_switcher"))
+
+    def _show_quick_switcher(self) -> None:
+        pruned_count = self._shelf_service.prune_missing()
+        if pruned_count:
+            self._persist_managed_state("closed windows pruned before quick switcher")
+        shelf_items = tuple(self._shelf_service.shelved_items())
+        pinned_items = tuple(self._shelf_service.pinned_items())
+        self._last_shelf_items = shelf_items
+        self._last_pinned_items = pinned_items
+        self._quick_switcher.show_switcher(
+            self._quick_switcher_items(shelf_items, pinned_items)
+        )
+        LOGGER.info(
+            "Quick hidden-window switcher opened: hidden=%s pinned=%s overlay_groups=%s",
+            len(shelf_items),
+            len(pinned_items),
+            len(list(self._overlay_group_service.groups())),
+        )
+
+    def _quick_switcher_items(
+        self,
+        shelf_items: Sequence[ShelfItem],
+        pinned_items: Sequence[PinnedItem],
+    ) -> list[SwitcherItem]:
+        items: list[SwitcherItem] = []
+        group_names = {
+            group.id: self._group_display_name(group)
+            for group in self._shelf_service.groups()
+        }
+        overlay_groups = list(self._overlay_group_service.groups())
+        overlay_by_handle = self._overlay_group_names_by_handle(overlay_groups)
+        for shelf_item in sorted(
+            shelf_items,
+            key=lambda item: item.hidden_at,
+            reverse=True,
+        ):
+            window = shelf_item.window
+            group_label = overlay_by_handle.get(window.handle) or group_names.get(
+                shelf_item.group_id,
+                tr("group.ungrouped"),
+            )
+            items.append(
+                SwitcherItem(
+                    kind=SWITCHER_KIND_HIDDEN,
+                    title=window.title or tr("recovery.unknown_window", handle=window.handle),
+                    subtitle=tr(
+                        "switcher.item.hidden.subtitle",
+                        app=window.process_name,
+                        group=group_label,
+                    ),
+                    handle=window.handle,
+                    badge=tr("switcher.badge.hidden"),
+                    icon=self._icon_provider.icon_for_window(window),
+                )
+            )
+        hidden_handles = {item.window.handle for item in shelf_items}
+        for group in overlay_groups:
+            count = sum(
+                1
+                for handle in group.assigned_window_ids
+                if handle in hidden_handles
+            )
+            items.append(
+                SwitcherItem(
+                    kind=SWITCHER_KIND_OVERLAY_GROUP,
+                    title=group.name,
+                    subtitle=tr(
+                        "switcher.item.overlay_group.subtitle",
+                        count=count,
+                    ),
+                    group_id=group.id,
+                    badge=tr("switcher.badge.overlay_group"),
+                    icon=self._icon_provider.folder_icon(),
+                )
+            )
+        for pinned_item in self._ordered_pinned_items(pinned_items):
+            window = pinned_item.window
+            items.append(
+                SwitcherItem(
+                    kind=SWITCHER_KIND_PINNED,
+                    title=window.title or tr("recovery.unknown_window", handle=window.handle),
+                    subtitle=tr(
+                        "switcher.item.pinned.subtitle",
+                        app=window.process_name,
+                    ),
+                    handle=window.handle,
+                    badge=tr("switcher.badge.pinned"),
+                    icon=self._icon_provider.icon_for_window(window),
+                )
+            )
+        return items
+
+    def _overlay_group_names_by_handle(
+        self,
+        groups: Sequence[OverlayGroup],
+    ) -> dict[int, str]:
+        names: dict[int, str] = {}
+        for group in groups:
+            for handle in group.assigned_window_ids:
+                names[handle] = group.name
+        return names
+
+    def _activate_switcher_item(self, item: object) -> None:
+        if not isinstance(item, SwitcherItem):
+            return
+        if item.kind == SWITCHER_KIND_HIDDEN and item.handle is not None:
+            self._restore_handles([item.handle])
+            return
+        if item.kind == SWITCHER_KIND_PINNED and item.handle is not None:
+            self._bring_pinned_handles_to_front([item.handle])
+            return
+        if item.kind == SWITCHER_KIND_OVERLAY_GROUP and item.group_id is not None:
+            self._open_overlay_group_from_switcher(item.group_id)
+
+    def _open_overlay_group_from_switcher(self, group_id: str) -> None:
+        self._sync_overlay_markers()
+        if self._overlay_marker_manager.open_group_from_switcher(group_id):
+            self._show_status(
+                tr("switcher.status.overlay_group_opened"),
+                kind=NotificationKind.OVERLAY,
+            )
+            return
+        self._show_status(
+            tr("switcher.status.overlay_group_unavailable"),
+            kind=NotificationKind.OVERLAY,
+        )
 
     def _restore_selected(self, table: QTableWidget) -> None:
         handles = self._selected_handles(table)
@@ -3417,7 +3675,10 @@ class MainWindow(QMainWindow):
 
     def _restore_handles(self, handles: list[int]) -> None:
         if not handles:
-            self.statusBar().showMessage(tr("status.select_managed_restore"))
+            self._show_status(
+                tr("status.select_managed_restore"),
+                kind=NotificationKind.RESTORE,
+            )
             return
 
         self._set_loading(True, tr("status.loading_restoring"))
@@ -3434,10 +3695,14 @@ class MainWindow(QMainWindow):
                     skipped += 1
             self._persist_managed_state("windows restored")
             self._refresh()
-            self.statusBar().showMessage(self._restore_summary(restored, skipped))
+            self._show_status(
+                self._restore_summary(restored, skipped),
+                kind=NotificationKind.RESTORE,
+            )
             self._tray_notify(
                 tr("tray.notification.restore.title"),
                 self._restore_summary(restored, skipped),
+                kind=NotificationKind.RESTORE,
             )
         except ShelfyGAIError as exc:
             LOGGER.exception("Restore failed")
@@ -3453,7 +3718,10 @@ class MainWindow(QMainWindow):
     def _restore_all(self) -> None:
         managed_count = len(self._shelf_service.shelved_items())
         if managed_count == 0:
-            self.statusBar().showMessage(tr("status.no_managed_restore"))
+            self._show_status(
+                tr("status.no_managed_restore"),
+                kind=NotificationKind.RESTORE,
+            )
             return
         if managed_count > 1:
             answer = QMessageBox.question(
@@ -3471,10 +3739,14 @@ class MainWindow(QMainWindow):
             )
             self._persist_managed_state("all windows restored")
             self._refresh()
-            self.statusBar().showMessage(self._restore_summary(restored, skipped))
+            self._show_status(
+                self._restore_summary(restored, skipped),
+                kind=NotificationKind.RESTORE,
+            )
             self._tray_notify(
                 tr("tray.notification.restore.title"),
                 self._restore_summary(restored, skipped),
+                kind=NotificationKind.RESTORE,
             )
         except ShelfyGAIError as exc:
             LOGGER.exception("Restore-all failed")
@@ -3487,22 +3759,140 @@ class MainWindow(QMainWindow):
         finally:
             self._set_loading(False)
 
+    def _reset_everything(
+        self,
+        _checked: bool = False,
+        *,
+        confirm: bool = True,
+    ) -> None:
+        if confirm:
+            answer = QMessageBox.question(
+                self,
+                tr("dialog.reset_everything.title"),
+                tr("dialog.reset_everything.message"),
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        self._set_loading(True, tr("status.loading_resetting"))
+        try:
+            result = self._perform_global_reset()
+            self._refresh(reason="global reset", sync_overlays=False)
+            self._sync_tray_actions()
+            message = tr(
+                "status.reset_complete",
+                restored=result["restored"],
+                unpinned=result["unpinned"],
+            )
+            self._show_status(message, kind=NotificationKind.RESTORE)
+            self._tray_notify(
+                tr("tray.notification.reset.title"),
+                message,
+                kind=NotificationKind.RESTORE,
+            )
+        except Exception:
+            LOGGER.exception("Unexpected global emergency reset failure")
+            self._show_error(tr("error.reset_everything"))
+        finally:
+            self._set_loading(False)
+
+    def _perform_global_reset(self) -> dict[str, int]:
+        LOGGER.info("Global emergency reset requested")
+
+        unpinned = 0
+        unpin_skipped = 0
+        try:
+            unpinned, unpin_skipped = self._shelf_service.unpin_all()
+        except Exception:
+            LOGGER.exception("Global reset could not unpin all windows")
+
+        restored = 0
+        restore_skipped = 0
+        try:
+            restored, restore_skipped = self._shelf_service.restore_all(focus=False)
+        except Exception:
+            LOGGER.exception("Global reset could not restore all hidden windows")
+
+        overlay_assignments_removed = 0
+        if hasattr(self, "_overlay_group_service"):
+            try:
+                overlay_assignments_removed = (
+                    self._overlay_group_service.clear_assigned_windows()
+                )
+            except Exception:
+                LOGGER.exception("Global reset could not clear overlay group assignments")
+
+        overlay_markers_removed = 0
+        if hasattr(self, "_overlay_marker_manager"):
+            try:
+                overlay_markers_removed = self._overlay_marker_manager.reset_runtime()
+            except Exception:
+                LOGGER.exception("Global reset could not remove overlay markers")
+                try:
+                    self._overlay_marker_manager.hide_all()
+                except Exception:
+                    LOGGER.exception("Global reset overlay fallback cleanup failed")
+
+        self._clear_temporary_runtime_state()
+        self._persist_managed_state("global emergency reset")
+        self._recovery_store.clear(reason="global emergency reset")
+
+        LOGGER.info(
+            "Global emergency reset completed: restored_windows_count=%s "
+            "restore_skipped_count=%s unpinned_windows_count=%s "
+            "unpin_skipped_count=%s overlay_markers_removed=%s "
+            "overlay_assignments_removed=%s runtime_state_cleared=1",
+            restored,
+            restore_skipped,
+            unpinned,
+            unpin_skipped,
+            overlay_markers_removed,
+            overlay_assignments_removed,
+        )
+        return {
+            "restored": restored,
+            "restore_skipped": restore_skipped,
+            "unpinned": unpinned,
+            "unpin_skipped": unpin_skipped,
+            "overlay_markers_removed": overlay_markers_removed,
+            "overlay_assignments_removed": overlay_assignments_removed,
+        }
+
+    def _clear_temporary_runtime_state(self) -> None:
+        for timer_name in (
+            "_open_windows_refresh_timer",
+            "_pinned_watcher_timer",
+            "_window_state_refresh_timer",
+            "_refresh_debounce_timer",
+            "_open_windows_filter_timer",
+            "_icon_refresh_timer",
+        ):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                timer.stop()
+        self._pending_refresh_reason = None
+        if hasattr(self, "_pinned_order"):
+            self._pinned_order.clear()
+        self._last_shelf_items = ()
+        self._last_pinned_items = ()
+        LOGGER.info("Global emergency reset runtime state cleared")
+
     def _bring_selected_forward(self, table: QTableWidget | None = None) -> None:
         handles = self._selected_handles(table or self._available_table)
         if not handles:
-            self.statusBar().showMessage(tr("status.select_open_forward"))
+            self._show_status(tr("status.select_open_forward"))
             return
 
         self._bring_handles_forward(handles)
 
     def _bring_handles_forward(self, handles: list[int]) -> None:
         if not handles:
-            self.statusBar().showMessage(tr("status.select_open_forward"))
+            self._show_status(tr("status.select_open_forward"))
             return
 
         try:
             self._shelf_service.bring_to_front(handles[0])
-            self.statusBar().showMessage(tr("status.foreground_activation"))
+            self._show_status(tr("status.foreground_activation"))
         except ShelfyGAIError as exc:
             LOGGER.exception("Foreground activation failed")
             self._show_error(str(exc))
@@ -3511,38 +3901,73 @@ class MainWindow(QMainWindow):
             self._show_error(tr("error.bring_forward"))
 
     def _show_error(self, message: str) -> None:
-        self.statusBar().showMessage(message)
+        self._show_status(message, critical=True)
         self._tray_notify(
             tr("error.notification.title"),
             message,
+            critical=True,
             icon=QSystemTrayIcon.MessageIcon.Warning,
             duration_ms=6_000,
         )
-        QMessageBox.warning(self, APP_NAME, message)
+        self._notifications.show_warning_popup(
+            self,
+            APP_NAME,
+            message,
+            critical=True,
+        )
 
     def _open_github(self) -> None:
-        QDesktopServices.openUrl(QUrl(GITHUB_REPOSITORY_URL))
+        self._open_url(GITHUB_REPOSITORY_URL)
+
+    def _open_url(self, url: str) -> None:
+        if not QDesktopServices.openUrl(QUrl(url)):
+            LOGGER.warning("Could not open external URL: %s", url)
 
     def _check_for_updates(self) -> None:
         self._set_loading(True, tr("status.loading_checking"))
         try:
             result = self._update_service.check_for_updates()
-            details = tr("about.update.placeholder_result")
-            if result.checked_url:
-                details = tr(
-                    "update.future_endpoint",
-                    message=details,
-                    url=result.checked_url,
-                )
+            details = self._update_result_text(result)
             self._update_status_label.setText(details)
-            self.statusBar().showMessage(tr("status.update_check_complete"))
-            LOGGER.info("Update check placeholder result: status=%s", result.status)
+            self._show_status(tr("status.update_check_complete"))
+            LOGGER.info(
+                "Update check result: status=%s latest=%s release_url=%s",
+                result.status,
+                result.latest_version,
+                result.release_url,
+            )
         except Exception:
-            LOGGER.exception("Update check placeholder failed")
+            LOGGER.exception("Update check failed")
             self._update_status_label.setText(tr("error.update_check"))
-            self.statusBar().showMessage(tr("status.update_check_failed"))
+            self._show_status(tr("status.update_check_failed"))
         finally:
             self._set_loading(False)
+
+    def _update_result_text(self, result: object) -> str:
+        status = getattr(result, "status", UpdateCheckStatus.ERROR)
+        latest_version = getattr(result, "latest_version", None)
+        release_url = getattr(result, "release_url", None)
+        checked_url = getattr(result, "checked_url", None)
+        message = getattr(result, "message", "")
+        if status == UpdateCheckStatus.UPDATE_AVAILABLE:
+            text = tr(
+                "about.update.available",
+                current=APP_VERSION,
+                latest=latest_version or tr("label.unknown"),
+            )
+        elif status == UpdateCheckStatus.UP_TO_DATE:
+            text = tr("about.update.up_to_date", current=APP_VERSION)
+        elif status == UpdateCheckStatus.NO_RELEASES:
+            text = tr("about.update.no_releases")
+        elif status == UpdateCheckStatus.OFFLINE:
+            text = tr("about.update.offline")
+        else:
+            text = tr("about.update.error", error=message or tr("label.unknown"))
+        if release_url:
+            text = tr("update.with_release_url", message=text, url=release_url)
+        if checked_url:
+            text = tr("update.with_checked_url", message=text, url=checked_url)
+        return text
 
     def show_startup_notification(self) -> None:
         if self._settings.startup_notification_enabled:
@@ -3572,6 +3997,16 @@ class MainWindow(QMainWindow):
         self._show_from_tray()
         self._show_settings_page()
 
+    def _open_hidden_windows_from_tray(self) -> None:
+        self._show_from_tray()
+        self._show_page(1)
+        LOGGER.debug("Hidden windows page opened from tray")
+
+    def _open_overlay_groups_from_tray(self) -> None:
+        self._show_from_tray()
+        self._show_page(3)
+        LOGGER.debug("Overlay groups page opened from tray")
+
     def _quit_from_tray(self) -> None:
         LOGGER.info("Quit requested from tray")
         self._is_quitting = True
@@ -3597,21 +4032,40 @@ class MainWindow(QMainWindow):
     def _tray_available(self) -> bool:
         return self._tray_icon is not None and self._tray_icon.isVisible()
 
+    def _show_status(
+        self,
+        message: str,
+        *,
+        kind: NotificationKind = NotificationKind.STATUS,
+        critical: bool = False,
+        timeout_ms: int = 0,
+    ) -> None:
+        self._notifications.show_status(
+            self.statusBar(),
+            message,
+            kind=kind,
+            critical=critical,
+            timeout_ms=timeout_ms,
+        )
+
     def _tray_notify(
         self,
         title: str,
         message: str,
         *,
+        kind: NotificationKind = NotificationKind.TRAY,
+        critical: bool = False,
         icon: QSystemTrayIcon.MessageIcon = QSystemTrayIcon.MessageIcon.Information,
         duration_ms: int = 4_000,
     ) -> None:
-        if not self._tray_available() or not QSystemTrayIcon.supportsMessages():
-            return
-        self._tray_icon.showMessage(
+        self._notifications.show_tray(
+            self._tray_icon,
             title,
             message,
-            icon,
-            duration_ms,
+            kind=kind,
+            critical=critical,
+            icon=icon,
+            duration_ms=duration_ms,
         )
 
     def _restore_summary(self, restored: int, skipped: int) -> str:
@@ -3625,8 +4079,31 @@ class MainWindow(QMainWindow):
         return tr("status.unpinned_count", count=unpinned)
 
     def _sync_tray_actions(self) -> None:
+        hidden_count = len(self._shelf_service.shelved_items())
+        pinned_count = len(self._shelf_service.pinned_items())
+        overlay_group_count = (
+            len(list(self._overlay_group_service.groups()))
+            if hasattr(self, "_overlay_group_service")
+            else 0
+        )
+        if self._tray_hidden_windows_action is not None:
+            self._tray_hidden_windows_action.setText(
+                tr("tray.hidden_windows", count=hidden_count)
+            )
+        if self._tray_overlay_groups_action is not None:
+            self._tray_overlay_groups_action.setText(
+                tr("tray.overlay_groups", count=overlay_group_count)
+            )
         if self._tray_restore_all_action is not None:
-            self._tray_restore_all_action.setEnabled(self._shelf_service.has_shelved_windows())
+            self._tray_restore_all_action.setText(
+                tr("tray.restore_all", count=hidden_count)
+            )
+            self._tray_restore_all_action.setEnabled(hidden_count > 0)
+        if self._tray_unpin_all_action is not None:
+            self._tray_unpin_all_action.setText(tr("tray.unpin_all", count=pinned_count))
+            self._tray_unpin_all_action.setEnabled(pinned_count > 0)
+        if self._tray_reset_action is not None:
+            self._tray_reset_action.setEnabled(hidden_count > 0 or pinned_count > 0)
 
     def _hide_tray_icon(self) -> None:
         if self._tray_icon is not None:
@@ -3678,12 +4155,18 @@ class MainWindow(QMainWindow):
                 self._hotkey_status_label.setText(summary)
 
     def _handle_global_hotkey(self, action_id: str) -> None:
-        if action_id == HOTKEY_QUICK_HIDE:
+        if action_id == HOTKEY_HIDE_SELECTED_WINDOW:
             self._quick_hide_from_hotkey()
         elif action_id == HOTKEY_RESTORE_LAST:
             self._restore_last_from_hotkey()
-        elif action_id == HOTKEY_TOGGLE_VISIBILITY:
-            self._toggle_visibility_from_hotkey()
+        elif action_id == HOTKEY_TOGGLE_OVERLAY_HUB:
+            self._toggle_overlay_hub_from_hotkey()
+        elif action_id == HOTKEY_OPEN_SWITCHER:
+            self._show_quick_switcher_from_hotkey()
+        elif action_id == HOTKEY_PIN_UNPIN_FOCUSED:
+            self._pin_unpin_focused_from_hotkey()
+        elif action_id == HOTKEY_RESET_EVERYTHING:
+            self._reset_everything(confirm=False)
 
     def _open_settings_dialog(self) -> None:
         self._save_settings()
@@ -3697,7 +4180,7 @@ class MainWindow(QMainWindow):
             self._configure_global_hotkeys()
             self._configure_pinned_watcher()
             self._sync_tray_actions()
-            self.statusBar().showMessage(tr("status.settings_saved"))
+            self._show_status(tr("status.settings_saved"))
 
     def _sync_settings_controls(self) -> None:
         self._settings_controls_syncing = True
@@ -3736,11 +4219,65 @@ class MainWindow(QMainWindow):
             self._startup_notification_checkbox.setChecked(
                 self._settings.startup_notification_enabled
             )
+            self._notifications_enabled_checkbox.setChecked(
+                self._settings.notifications_enabled
+            )
+            self._tray_notifications_checkbox.setChecked(
+                self._settings.show_tray_notifications
+            )
+            self._overlay_notifications_checkbox.setChecked(
+                self._settings.show_overlay_notifications
+            )
+            self._restore_notifications_checkbox.setChecked(
+                self._settings.show_restore_notifications
+            )
+            self._pin_notifications_checkbox.setChecked(
+                self._settings.show_pin_unpin_notifications
+            )
+            self._silent_mode_checkbox.setChecked(self._settings.silent_mode)
+            self._sync_notification_control_state()
             self._debug_mode_checkbox.setChecked(self._settings.debug_mode)
+            self._overlay_enabled_checkbox.setChecked(self._settings.overlay_groups_enabled)
+            self._overlay_use_hub_checkbox.setChecked(
+                self._settings.overlay_use_unified_hub
+            )
+            self._overlay_individual_markers_checkbox.setChecked(
+                self._settings.overlay_use_individual_markers
+            )
+            self._overlay_replace_markers_checkbox.setChecked(
+                self._settings.overlay_replace_individual_markers
+            )
+            self._overlay_hub_always_visible_checkbox.setChecked(
+                self._settings.overlay_hub_always_visible
+            )
+            self._overlay_hub_auto_hide_checkbox.setChecked(
+                self._settings.overlay_hub_auto_hide
+            )
+            self._overlay_auto_snap_checkbox.setChecked(
+                self._settings.overlay_auto_snap_to_taskbar
+            )
+            self._overlay_compact_mode_checkbox.setChecked(
+                self._settings.overlay_compact_mode
+            )
+            self._overlay_marker_spacing_spin.setValue(
+                self._settings.overlay_marker_spacing
+            )
+            self._overlay_hub_opacity_spin.setValue(self._settings.overlay_hub_opacity)
             self._sync_settings_accent_buttons()
         finally:
             self._settings_controls_syncing = False
         self._sync_hotkey_controls()
+
+    def _sync_notification_control_state(self) -> None:
+        notifications_enabled = self._notifications_enabled_checkbox.isChecked()
+        silent_mode = self._silent_mode_checkbox.isChecked()
+        for checkbox in (
+            self._tray_notifications_checkbox,
+            self._overlay_notifications_checkbox,
+            self._restore_notifications_checkbox,
+            self._pin_notifications_checkbox,
+        ):
+            checkbox.setEnabled(not silent_mode and notifications_enabled)
 
     def _sync_hotkey_controls(self) -> None:
         if not self._hotkey_sequence_edits:
@@ -3762,8 +4299,26 @@ class MainWindow(QMainWindow):
         if self._syncing_hotkey_controls:
             return
         self._apply_hotkey_controls_to_settings()
+        validation_errors = self._hotkey_validation_errors()
+        if validation_errors:
+            self._hotkey_registration_errors = validation_errors
+            self._hotkey_status_label.setText("; ".join(validation_errors))
+            LOGGER.warning("Global hotkey validation failed: %s", validation_errors)
+            return
         self._settings_store.save(self._settings, reason="global hotkeys changed")
         self._configure_global_hotkeys()
+
+    def _hotkey_validation_errors(self) -> list[str]:
+        try:
+            from shelfygai.platform.windows.hotkeys import validate_hotkey_configs
+        except Exception:
+            LOGGER.debug("Could not import hotkey validator", exc_info=True)
+            return []
+        errors = validate_hotkey_configs(self._settings.global_hotkeys)
+        return [
+            f"{self._hotkey_label(action_id)}: {message}"
+            for action_id, message in errors.items()
+        ]
 
     def _apply_hotkey_controls_to_settings(self) -> None:
         if not self._hotkey_sequence_edits:
@@ -3834,7 +4389,35 @@ class MainWindow(QMainWindow):
         self._settings.startup_notification_enabled = (
             self._startup_notification_checkbox.isChecked()
         )
+        self._settings.notifications_enabled = self._notifications_enabled_checkbox.isChecked()
+        self._settings.show_tray_notifications = self._tray_notifications_checkbox.isChecked()
+        self._settings.show_overlay_notifications = (
+            self._overlay_notifications_checkbox.isChecked()
+        )
+        self._settings.show_restore_notifications = (
+            self._restore_notifications_checkbox.isChecked()
+        )
+        self._settings.show_pin_unpin_notifications = self._pin_notifications_checkbox.isChecked()
+        self._settings.silent_mode = self._silent_mode_checkbox.isChecked()
         self._settings.debug_mode = self._debug_mode_checkbox.isChecked()
+        self._settings.overlay_groups_enabled = self._overlay_enabled_checkbox.isChecked()
+        self._settings.overlay_use_unified_hub = self._overlay_use_hub_checkbox.isChecked()
+        self._settings.overlay_use_individual_markers = (
+            self._overlay_individual_markers_checkbox.isChecked()
+        )
+        self._settings.overlay_replace_individual_markers = (
+            self._overlay_replace_markers_checkbox.isChecked()
+        )
+        self._settings.overlay_hub_always_visible = (
+            self._overlay_hub_always_visible_checkbox.isChecked()
+        )
+        self._settings.overlay_hub_auto_hide = (
+            self._overlay_hub_auto_hide_checkbox.isChecked()
+        )
+        self._settings.overlay_auto_snap_to_taskbar = self._overlay_auto_snap_checkbox.isChecked()
+        self._settings.overlay_compact_mode = self._overlay_compact_mode_checkbox.isChecked()
+        self._settings.overlay_marker_spacing = self._overlay_marker_spacing_spin.value()
+        self._settings.overlay_hub_opacity = self._overlay_hub_opacity_spin.value()
 
     def _save_runtime_settings(self, reason: str) -> None:
         self._apply_hotkey_controls_to_settings()
@@ -4087,6 +4670,25 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_overlay_group_service"):
             self._settings.overlay_groups_enabled = self._overlay_enabled_checkbox.isChecked()
             self._settings.selected_overlay_group_id = self._selected_overlay_group_id
+            self._settings.overlay_use_unified_hub = self._overlay_use_hub_checkbox.isChecked()
+            self._settings.overlay_use_individual_markers = (
+                self._overlay_individual_markers_checkbox.isChecked()
+            )
+            self._settings.overlay_replace_individual_markers = (
+                self._overlay_replace_markers_checkbox.isChecked()
+            )
+            self._settings.overlay_hub_always_visible = (
+                self._overlay_hub_always_visible_checkbox.isChecked()
+            )
+            self._settings.overlay_hub_auto_hide = (
+                self._overlay_hub_auto_hide_checkbox.isChecked()
+            )
+            self._settings.overlay_auto_snap_to_taskbar = (
+                self._overlay_auto_snap_checkbox.isChecked()
+            )
+            self._settings.overlay_compact_mode = self._overlay_compact_mode_checkbox.isChecked()
+            self._settings.overlay_marker_spacing = self._overlay_marker_spacing_spin.value()
+            self._settings.overlay_hub_opacity = self._overlay_hub_opacity_spin.value()
             self._settings.overlay_groups = [
                 asdict(group)
                 for group in self._overlay_group_service.groups()
@@ -4111,10 +4713,10 @@ def _overlay_groups_from_settings(groups: Sequence[dict[str, object]]) -> list[O
                 id=group_id.strip(),
                 name=name.strip(),
                 color=_overlay_string(group.get("color"), "#2f81f7"),
-                marker_width=_overlay_int(group.get("marker_width"), 10),
-                marker_height=_overlay_int(group.get("marker_height"), 88),
-                opacity=_overlay_float(group.get("opacity"), 0.95),
-                corner_radius=_overlay_int(group.get("corner_radius"), 6),
+                marker_width=_overlay_int(group.get("marker_width"), 8),
+                marker_height=_overlay_int(group.get("marker_height"), 64),
+                opacity=_overlay_float(group.get("opacity"), 0.9),
+                corner_radius=_overlay_int(group.get("corner_radius"), 8),
                 hover_delay_ms=_overlay_int(group.get("hover_delay_ms"), 1200),
                 locked_position=_overlay_bool(group.get("locked_position"), False),
                 hide_during_fullscreen=_overlay_bool(

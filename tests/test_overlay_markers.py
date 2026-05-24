@@ -1,14 +1,28 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QPoint, QRect, QSize
 
 from shelfygai.core.models import OverlayGroup
 from shelfygai.ui.overlay_markers import (
+    OverlayDisplayConfig,
+    default_hub_position_from_rect,
+    default_marker_position_from_rect,
     fullscreen_hidden_group_ids,
     is_fullscreen_window_rect,
     quick_controls_position_from_rect,
+    snap_point_to_taskbar_edge_from_rect,
     taskbar_edge_from_geometries,
 )
+
+
+def test_overlay_display_config_defaults_to_unified_hub() -> None:
+    config = OverlayDisplayConfig()
+
+    assert config.use_unified_hub is True
+    assert config.replace_individual_markers is True
+    assert config.hub_always_visible is True
+    assert config.hub_auto_hide is False
+    assert config.hub_opacity == 0.94
 
 
 def test_taskbar_edge_detection_bottom() -> None:
@@ -147,3 +161,87 @@ def test_quick_controls_position_for_right_taskbar_stays_left_of_marker() -> Non
     )
 
     assert position.x() < 1800
+
+
+def test_default_marker_position_starts_near_taskbar_tray_area() -> None:
+    position = default_marker_position_from_rect(
+        QRect(0, 0, 1920, 1040),
+        "bottom",
+        8,
+        64,
+        0,
+        spacing=8,
+    )
+
+    assert position.x() > 1800
+    assert position.y() == 968
+
+
+def test_default_hub_position_starts_near_taskbar_tray_area() -> None:
+    position = default_hub_position_from_rect(
+        QRect(0, 0, 1920, 1040),
+        "bottom",
+        38,
+        38,
+        spacing=8,
+    )
+
+    assert position == QPoint(1746, 994)
+
+
+def test_default_hub_position_avoids_vertical_taskbar_end_area() -> None:
+    position = default_hub_position_from_rect(
+        QRect(80, 0, 1840, 1080),
+        "left",
+        38,
+        38,
+        spacing=8,
+    )
+
+    assert position == QPoint(88, 906)
+
+
+def test_snap_point_near_taskbar_edge_snaps_to_edge() -> None:
+    position, edge, snapped = snap_point_to_taskbar_edge_from_rect(
+        QPoint(1200, 980),
+        QSize(38, 38),
+        QRect(0, 0, 1920, 1040),
+        "bottom",
+        spacing=8,
+        threshold=72,
+    )
+
+    assert snapped is True
+    assert edge == "bottom"
+    assert position.y() == 994
+
+
+def test_hub_snap_avoids_clock_and_tray_area() -> None:
+    position, edge, snapped = snap_point_to_taskbar_edge_from_rect(
+        QPoint(1870, 980),
+        QSize(38, 38),
+        QRect(0, 0, 1920, 1040),
+        "bottom",
+        spacing=8,
+        threshold=72,
+        avoid_tray=True,
+    )
+
+    assert snapped is True
+    assert edge == "bottom"
+    assert position == QPoint(1746, 994)
+
+
+def test_snap_point_far_from_taskbar_edge_stays_free() -> None:
+    position, edge, snapped = snap_point_to_taskbar_edge_from_rect(
+        QPoint(800, 400),
+        QSize(38, 38),
+        QRect(0, 0, 1920, 1040),
+        "bottom",
+        spacing=8,
+        threshold=72,
+    )
+
+    assert snapped is False
+    assert edge == "free"
+    assert position == QPoint(800, 400)

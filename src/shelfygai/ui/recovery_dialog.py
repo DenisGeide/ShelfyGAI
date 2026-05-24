@@ -12,10 +12,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
-    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +30,7 @@ from shelfygai.crash import (
     RecoveryWindowResult,
 )
 from shelfygai.i18n import tr
+from shelfygai.ui.widgets.animated_button import AnimatedHoverButton
 
 LOGGER = logging.getLogger(__name__)
 
@@ -70,15 +69,12 @@ class RecoveryDialog(QDialog):
         self._results_layout = QVBoxLayout(self._results_container)
         self._results_layout.setContentsMargins(0, 0, 0, 0)
         self._results_layout.setSpacing(10)
-        self._restore_button = QPushButton()
+        self._restore_button = AnimatedHoverButton()
         self._restore_button.setObjectName("PrimaryButton")
-        self._restore_button.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton)
-        )
         self._restore_button.clicked.connect(self.restore_everything_now)
-        self._unpin_pinned_button = QPushButton()
+        self._unpin_pinned_button = AnimatedHoverButton()
         self._unpin_pinned_button.clicked.connect(self.unpin_remembered_windows)
-        self._continue_button = QPushButton()
+        self._continue_button = AnimatedHoverButton()
         self._continue_button.clicked.connect(self.accept)
 
         self._build_layout()
@@ -185,8 +181,8 @@ class RecoveryDialog(QDialog):
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 28, 28, 22)
-        layout.setSpacing(18)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(14)
 
         header = QHBoxLayout()
         logo = QLabel()
@@ -195,7 +191,7 @@ class RecoveryDialog(QDialog):
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         copy = QVBoxLayout()
-        copy.setSpacing(6)
+        copy.setSpacing(4)
         title = QLabel(tr("recovery.heading"))
         title.setObjectName("HeaderTitle")
         description = QLabel(tr("recovery.description"))
@@ -319,11 +315,6 @@ class RecoveryDialog(QDialog):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(12)
 
-        icon = QLabel()
-        icon.setFixedSize(34, 34)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setPixmap(self._status_icon(item.status, pending).pixmap(26, 26))
-
         copy = QVBoxLayout()
         copy.setSpacing(3)
         title = QLabel(item.title or tr("recovery.unknown_window", handle=item.handle))
@@ -354,21 +345,9 @@ class RecoveryDialog(QDialog):
         status = QLabel(status_text)
         status.setStyleSheet(f"font-weight: 700; color: {_status_color(item.status, pending)};")
 
-        layout.addWidget(icon)
         layout.addLayout(copy, 1)
         layout.addWidget(status, 0, Qt.AlignmentFlag.AlignTop)
         return card
-
-    def _status_icon(self, status: str, pending: bool) -> QIcon:
-        if pending:
-            icon = QStyle.StandardPixmap.SP_MessageBoxInformation
-        elif status == RECOVERY_STATUS_RESTORED:
-            icon = QStyle.StandardPixmap.SP_DialogApplyButton
-        elif status == RECOVERY_STATUS_FAILED:
-            icon = QStyle.StandardPixmap.SP_MessageBoxCritical
-        else:
-            icon = QStyle.StandardPixmap.SP_MessageBoxWarning
-        return self.style().standardIcon(icon)
 
     def _reason_text(self, item: RecoveryWindowResult) -> str:
         if item.reason == RECOVERY_REASON_ERROR and item.detail:

@@ -49,6 +49,18 @@ By default, `MainWindow.closeEvent` restores all hidden windows before closing t
 
 The main window owns tray lifecycle, close-to-tray behavior, and global hotkey registration. Global hotkeys use the Windows `RegisterHotKey` API through `platform/windows/hotkeys.py`; ShelfyGAI does not install low-level keyboard hooks. Hotkeys are unregistered during application shutdown.
 
+## Notification Flow
+
+User-facing notifications are routed through `ui.notifications.NotificationManager`.
+The manager reads the current `AppSettings` and decides whether a status message,
+tray balloon, overlay message, restore message, or pin/unpin message should be
+shown. Silent mode suppresses all non-critical notifications, including tray
+balloons and temporary status banners.
+
+Critical safety messages bypass notification suppression. Crash recovery, failed
+restore, and fatal Windows API errors may still show dialogs or tray warnings so
+the user can recover the workspace.
+
 ## Startup
 
 Windows startup integration is current-user only. The startup helper reads and writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, validates the executable path before writing, and reports whether an existing startup entry is missing, invalid, or healthy. No administrator rights are required.

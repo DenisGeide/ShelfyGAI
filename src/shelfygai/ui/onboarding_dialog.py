@@ -15,11 +15,10 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QStyle,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -32,7 +31,9 @@ from shelfygai.constants import (
 )
 from shelfygai.i18n import SUPPORTED_LANGUAGES, set_language, tr
 from shelfygai.settings.settings_manager import AppSettings, SettingsManager
+from shelfygai.ui.notifications import NotificationManager
 from shelfygai.ui.theme import apply_theme
+from shelfygai.ui.widgets.animated_button import AnimatedHoverButton
 
 ACCENT_COLORS = [
     ("accent.blue", "#2f81f7"),
@@ -42,6 +43,34 @@ ACCENT_COLORS = [
     ("accent.violet", "#8b5cf6"),
     ("accent.slate", "#64748b"),
 ]
+
+ONBOARDING_STEPS = (
+    (
+        "onboarding.step.what.title",
+        "onboarding.step.what.body",
+        "onboarding.step.what.visual",
+    ),
+    (
+        "onboarding.step.hidden.title",
+        "onboarding.step.hidden.body",
+        "onboarding.step.hidden.visual",
+    ),
+    (
+        "onboarding.step.overlay.title",
+        "onboarding.step.overlay.body",
+        "onboarding.step.overlay.visual",
+    ),
+    (
+        "onboarding.step.pinned.title",
+        "onboarding.step.pinned.body",
+        "onboarding.step.pinned.visual",
+    ),
+    (
+        "onboarding.step.safety.title",
+        "onboarding.step.safety.body",
+        "onboarding.step.safety.visual",
+    ),
+)
 
 
 class SettingsDialog(QDialog):
@@ -57,6 +86,7 @@ class SettingsDialog(QDialog):
         self._settings_store = settings_store
         self._original_settings = replace(settings)
         self._settings = replace(settings)
+        self._notifications = NotificationManager(lambda: self._settings)
         self._first_launch = first_launch
         self._startup_toggle_available = True
         self._accent_buttons: dict[str, QToolButton] = {}
@@ -79,10 +109,20 @@ class SettingsDialog(QDialog):
         self._focus_restored_windows_checkbox = QCheckBox()
         self._startup_notification_checkbox = QCheckBox()
         self._debug_mode_checkbox = QCheckBox()
+        self._notifications_enabled_checkbox = QCheckBox()
+        self._tray_notifications_checkbox = QCheckBox()
+        self._overlay_notifications_checkbox = QCheckBox()
+        self._restore_notifications_checkbox = QCheckBox()
+        self._pin_notifications_checkbox = QCheckBox()
+        self._silent_mode_checkbox = QCheckBox()
         self._startup_status_label = QLabel()
         self._startup_status_label.setObjectName("Muted")
         self._startup_status_label.setWordWrap(True)
         self._launch_with_windows_checkbox.toggled.connect(self._sync_startup_options)
+        self._notifications_enabled_checkbox.toggled.connect(
+            self._sync_notification_control_state
+        )
+        self._silent_mode_checkbox.toggled.connect(self._sync_notification_control_state)
         self._hero_description_label: QLabel | None = None
         self._privacy_note_label: QLabel | None = None
         self._github_button: QPushButton | None = None
@@ -90,6 +130,12 @@ class SettingsDialog(QDialog):
         self._subtitle_label: QLabel | None = None
         self._cancel_button: QPushButton | None = None
         self._save_button: QPushButton | None = None
+        self._skip_button: QPushButton | None = None
+        self._onboarding_back_button: QPushButton | None = None
+        self._onboarding_next_button: QPushButton | None = None
+        self._onboarding_progress_label: QLabel | None = None
+        self._onboarding_stack: QStackedWidget | None = None
+        self._onboarding_step_labels: list[tuple[QLabel, QLabel, QLabel]] = []
         self._language_label: QLabel | None = None
         self._theme_label: QLabel | None = None
         self._accent_label: QLabel | None = None
@@ -119,8 +165,8 @@ class SettingsDialog(QDialog):
         panel.setMaximumWidth(360)
 
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(32, 36, 32, 30)
-        layout.setSpacing(16)
+        layout.setContentsMargins(26, 30, 26, 24)
+        layout.setSpacing(14)
 
         logo = QLabel()
         logo.setObjectName("AboutLogo")
@@ -141,8 +187,7 @@ class SettingsDialog(QDialog):
         privacy_note.setWordWrap(True)
         self._privacy_note_label = privacy_note
 
-        github_button = QPushButton()
-        github_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        github_button = AnimatedHoverButton()
         github_button.clicked.connect(self._open_github)
         self._github_button = github_button
 
@@ -157,8 +202,8 @@ class SettingsDialog(QDialog):
     def _build_settings_panel(self) -> QWidget:
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
-        layout.setContentsMargins(30, 30, 30, 24)
-        layout.setSpacing(18)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(14)
 
         header = QLabel()
         header.setObjectName("HeaderTitle")
@@ -170,6 +215,8 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(header)
         layout.addWidget(subtitle)
+        if self._first_launch:
+            layout.addWidget(self._build_onboarding_flow())
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -178,12 +225,27 @@ class SettingsDialog(QDialog):
         layout.addWidget(scroll, 1)
 
         footer = QHBoxLayout()
+        if self._first_launch:
+            skip_button = AnimatedHoverButton()
+            skip_button.clicked.connect(self._skip_onboarding)
+            self._skip_button = skip_button
+            footer.addWidget(skip_button)
         footer.addStretch(1)
 
-        cancel_button = QPushButton()
+        if self._first_launch:
+            back_button = AnimatedHoverButton()
+            back_button.clicked.connect(self._previous_onboarding_step)
+            next_button = AnimatedHoverButton()
+            next_button.clicked.connect(self._next_onboarding_step)
+            self._onboarding_back_button = back_button
+            self._onboarding_next_button = next_button
+            footer.addWidget(back_button)
+            footer.addWidget(next_button)
+
+        cancel_button = AnimatedHoverButton()
         cancel_button.clicked.connect(self.reject)
 
-        save_button = QPushButton()
+        save_button = AnimatedHoverButton()
         save_button.setObjectName("PrimaryButton")
         save_button.clicked.connect(self._save_and_accept)
         self._cancel_button = cancel_button
@@ -195,6 +257,91 @@ class SettingsDialog(QDialog):
         layout.addLayout(footer)
 
         return wrapper
+
+    def _build_onboarding_flow(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("OnboardingPanel")
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        title = QLabel()
+        title.setObjectName("SectionTitle")
+        title.setText(tr("onboarding.quick_start"))
+        progress = QLabel()
+        progress.setObjectName("Muted")
+        progress.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._onboarding_progress_label = progress
+        header.addWidget(title, 1)
+        header.addWidget(progress)
+
+        stack = QStackedWidget()
+        stack.setObjectName("OnboardingStack")
+        self._onboarding_stack = stack
+        for title_key, body_key, visual_key in ONBOARDING_STEPS:
+            stack.addWidget(self._build_onboarding_step(title_key, body_key, visual_key))
+
+        layout.addLayout(header)
+        layout.addWidget(stack)
+        self._sync_onboarding_step()
+        return panel
+
+    def _build_onboarding_step(
+        self,
+        title_key: str,
+        body_key: str,
+        visual_key: str,
+    ) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        visual = QFrame()
+        visual.setObjectName("OnboardingVisual")
+        visual.setMinimumWidth(180)
+        visual_layout = QVBoxLayout(visual)
+        visual_layout.setContentsMargins(14, 12, 14, 12)
+        visual_layout.setSpacing(8)
+
+        visual_logo = QLabel()
+        visual_logo.setObjectName("IconBadge")
+        visual_logo.setFixedSize(42, 42)
+        visual_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        visual_logo.setPixmap(QIcon(str(resource_path("app_icon.svg"))).pixmap(28, 28))
+        visual_text = QLabel()
+        visual_text.setObjectName("OnboardingVisualText")
+        visual_text.setWordWrap(True)
+        visual_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        visual_layout.addStretch(1)
+        visual_layout.addWidget(visual_logo, alignment=Qt.AlignmentFlag.AlignCenter)
+        visual_layout.addWidget(visual_text)
+        visual_layout.addStretch(1)
+
+        copy = QWidget()
+        copy_layout = QVBoxLayout(copy)
+        copy_layout.setContentsMargins(0, 0, 0, 0)
+        copy_layout.setSpacing(7)
+        title = QLabel()
+        title.setObjectName("CardTitle")
+        title.setWordWrap(True)
+        body = QLabel()
+        body.setObjectName("Muted")
+        body.setWordWrap(True)
+        copy_layout.addStretch(1)
+        copy_layout.addWidget(title)
+        copy_layout.addWidget(body)
+        copy_layout.addStretch(1)
+
+        layout.addWidget(visual)
+        layout.addWidget(copy, 1)
+        self._onboarding_step_labels.append((title, body, visual_text))
+        title.setProperty("i18n_key", title_key)
+        body.setProperty("i18n_key", body_key)
+        visual_text.setProperty("i18n_key", visual_key)
+        return page
 
     def _build_settings_content(self) -> QWidget:
         content = QWidget()
@@ -224,6 +371,19 @@ class SettingsDialog(QDialog):
                     self._startup_notification_checkbox,
                     self._debug_mode_checkbox,
                     self._startup_status_label,
+                ],
+            )
+        )
+        layout.addWidget(
+            self._build_card(
+                "settings.section.notifications",
+                [
+                    self._notifications_enabled_checkbox,
+                    self._tray_notifications_checkbox,
+                    self._overlay_notifications_checkbox,
+                    self._restore_notifications_checkbox,
+                    self._pin_notifications_checkbox,
+                    self._silent_mode_checkbox,
                 ],
             )
         )
@@ -357,6 +517,23 @@ class SettingsDialog(QDialog):
             self._settings.startup_notification_enabled
         )
         self._debug_mode_checkbox.setChecked(self._settings.debug_mode)
+        self._notifications_enabled_checkbox.setChecked(
+            self._settings.notifications_enabled
+        )
+        self._tray_notifications_checkbox.setChecked(
+            self._settings.show_tray_notifications
+        )
+        self._overlay_notifications_checkbox.setChecked(
+            self._settings.show_overlay_notifications
+        )
+        self._restore_notifications_checkbox.setChecked(
+            self._settings.show_restore_notifications
+        )
+        self._pin_notifications_checkbox.setChecked(
+            self._settings.show_pin_unpin_notifications
+        )
+        self._silent_mode_checkbox.setChecked(self._settings.silent_mode)
+        self._sync_notification_control_state()
         self._sync_startup_options()
         self._preview_theme()
 
@@ -398,6 +575,16 @@ class SettingsDialog(QDialog):
         settings.focus_restored_windows = self._focus_restored_windows_checkbox.isChecked()
         settings.startup_notification_enabled = self._startup_notification_checkbox.isChecked()
         settings.debug_mode = self._debug_mode_checkbox.isChecked()
+        settings.notifications_enabled = self._notifications_enabled_checkbox.isChecked()
+        settings.show_tray_notifications = self._tray_notifications_checkbox.isChecked()
+        settings.show_overlay_notifications = (
+            self._overlay_notifications_checkbox.isChecked()
+        )
+        settings.show_restore_notifications = (
+            self._restore_notifications_checkbox.isChecked()
+        )
+        settings.show_pin_unpin_notifications = self._pin_notifications_checkbox.isChecked()
+        settings.silent_mode = self._silent_mode_checkbox.isChecked()
         return settings
 
     def _save_and_accept(self) -> None:
@@ -410,10 +597,20 @@ class SettingsDialog(QDialog):
             )
             saved = self._settings_store.save(new_settings)
         except OSError as exc:
-            QMessageBox.warning(self, APP_NAME, tr("error.save_settings_detail", error=exc))
+            self._notifications.show_warning_popup(
+                self,
+                APP_NAME,
+                tr("error.save_settings_detail", error=exc),
+                critical=True,
+            )
             return
         if not saved:
-            QMessageBox.warning(self, APP_NAME, tr("error.save_settings"))
+            self._notifications.show_warning_popup(
+                self,
+                APP_NAME,
+                tr("error.save_settings"),
+                critical=True,
+            )
             return
 
         self._settings = new_settings
@@ -422,6 +619,9 @@ class SettingsDialog(QDialog):
         if qt_app is not None:
             apply_theme(qt_app, new_settings.theme, new_settings.accent_color)
         self.accept()
+
+    def _skip_onboarding(self) -> None:
+        self._save_and_accept()
 
     def reject(self) -> None:
         set_language(self._original_settings.language)
@@ -450,6 +650,17 @@ class SettingsDialog(QDialog):
             self._silent_startup_checkbox.setEnabled(False)
             return
         self._silent_startup_checkbox.setEnabled(self._launch_with_windows_checkbox.isChecked())
+
+    def _sync_notification_control_state(self) -> None:
+        enabled = self._notifications_enabled_checkbox.isChecked()
+        silent = self._silent_mode_checkbox.isChecked()
+        for checkbox in (
+            self._tray_notifications_checkbox,
+            self._overlay_notifications_checkbox,
+            self._restore_notifications_checkbox,
+            self._pin_notifications_checkbox,
+        ):
+            checkbox.setEnabled(enabled and not silent)
 
     def _set_accent(self, color: str) -> None:
         self._settings.accent_color = color
@@ -481,6 +692,35 @@ class SettingsDialog(QDialog):
 
     def _open_github(self) -> None:
         QDesktopServices.openUrl(QUrl(GITHUB_REPOSITORY_URL))
+
+    def _previous_onboarding_step(self) -> None:
+        if self._onboarding_stack is None:
+            return
+        self._onboarding_stack.setCurrentIndex(max(0, self._onboarding_stack.currentIndex() - 1))
+        self._sync_onboarding_step()
+
+    def _next_onboarding_step(self) -> None:
+        if self._onboarding_stack is None:
+            return
+        last_index = self._onboarding_stack.count() - 1
+        self._onboarding_stack.setCurrentIndex(
+            min(last_index, self._onboarding_stack.currentIndex() + 1)
+        )
+        self._sync_onboarding_step()
+
+    def _sync_onboarding_step(self) -> None:
+        if self._onboarding_stack is None:
+            return
+        current = self._onboarding_stack.currentIndex()
+        total = self._onboarding_stack.count()
+        if self._onboarding_progress_label is not None:
+            self._onboarding_progress_label.setText(
+                tr("onboarding.progress", current=current + 1, total=total)
+            )
+        if self._onboarding_back_button is not None:
+            self._onboarding_back_button.setEnabled(current > 0)
+        if self._onboarding_next_button is not None:
+            self._onboarding_next_button.setEnabled(current < total - 1)
 
     def _populate_language_combo(self) -> None:
         current = self._language_combo.currentData() or self._settings.language
@@ -526,6 +766,23 @@ class SettingsDialog(QDialog):
             self._save_button.setText(
                 tr("action.save_continue") if self._first_launch else tr("action.save")
             )
+        if self._skip_button is not None:
+            self._skip_button.setText(tr("action.skip"))
+        if self._onboarding_back_button is not None:
+            self._onboarding_back_button.setText(tr("action.back"))
+        if self._onboarding_next_button is not None:
+            self._onboarding_next_button.setText(tr("action.next"))
+        for title, body, visual in self._onboarding_step_labels:
+            title_key = title.property("i18n_key")
+            body_key = body.property("i18n_key")
+            visual_key = visual.property("i18n_key")
+            if isinstance(title_key, str):
+                title.setText(tr(title_key))
+            if isinstance(body_key, str):
+                body.setText(tr(body_key))
+            if isinstance(visual_key, str):
+                visual.setText(tr(visual_key))
+        self._sync_onboarding_step()
         if self._language_label is not None:
             self._language_label.setText(tr("label.language"))
         if self._theme_label is not None:
@@ -541,6 +798,18 @@ class SettingsDialog(QDialog):
         self._focus_restored_windows_checkbox.setText(tr("label.focus_restored_windows"))
         self._startup_notification_checkbox.setText(tr("label.startup_notification"))
         self._debug_mode_checkbox.setText(tr("label.debug_logging"))
+        self._notifications_enabled_checkbox.setText(tr("label.notifications_enabled"))
+        self._tray_notifications_checkbox.setText(tr("label.show_tray_notifications"))
+        self._overlay_notifications_checkbox.setText(
+            tr("label.show_overlay_notifications")
+        )
+        self._restore_notifications_checkbox.setText(
+            tr("label.show_restore_notifications")
+        )
+        self._pin_notifications_checkbox.setText(
+            tr("label.show_pin_unpin_notifications")
+        )
+        self._silent_mode_checkbox.setText(tr("label.silent_mode"))
         self._language_combo.setAccessibleName(tr("label.language"))
         self._theme_combo.setAccessibleName(tr("label.theme"))
         for _color, button in self._accent_buttons.items():

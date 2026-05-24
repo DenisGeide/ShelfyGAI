@@ -16,24 +16,44 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_GROUP = {"id": DEFAULT_GROUP_ID, "name": "Ungrouped", "sort_order": 0}
 OVERLAY_MARKER_DEFAULTS = {
-    "marker_width": 10,
-    "marker_height": 88,
-    "opacity": 0.95,
-    "corner_radius": 6,
+    "marker_width": 8,
+    "marker_height": 64,
+    "opacity": 0.9,
+    "corner_radius": 8,
     "hover_delay_ms": 1200,
     "locked_position": False,
     "hide_during_fullscreen": True,
     "show_quick_controls": True,
 }
-OVERLAY_POSITION_EDGES = {"bottom", "top", "left", "right"}
-HOTKEY_QUICK_HIDE = "quick_hide"
+OVERLAY_POSITION_EDGES = {"bottom", "top", "left", "right", "free"}
+DEFAULT_OVERLAY_HUB_POSITION: dict[str, dict[str, Any]] = {}
+HOTKEY_HIDE_SELECTED_WINDOW = "hide_selected_window"
+HOTKEY_QUICK_HIDE = HOTKEY_HIDE_SELECTED_WINDOW
 HOTKEY_RESTORE_LAST = "restore_last"
+HOTKEY_TOGGLE_OVERLAY_HUB = "toggle_overlay_hub"
+HOTKEY_OPEN_SWITCHER = "open_switcher"
+HOTKEY_PIN_UNPIN_FOCUSED = "pin_unpin_focused"
+HOTKEY_RESET_EVERYTHING = "reset_everything"
 HOTKEY_TOGGLE_VISIBILITY = "toggle_visibility"
-HOTKEY_ACTIONS = (HOTKEY_QUICK_HIDE, HOTKEY_RESTORE_LAST, HOTKEY_TOGGLE_VISIBILITY)
+LEGACY_HOTKEY_ACTION_ALIASES = {
+    "quick_hide": HOTKEY_HIDE_SELECTED_WINDOW,
+    HOTKEY_TOGGLE_VISIBILITY: HOTKEY_TOGGLE_OVERLAY_HUB,
+}
+HOTKEY_ACTIONS = (
+    HOTKEY_HIDE_SELECTED_WINDOW,
+    HOTKEY_RESTORE_LAST,
+    HOTKEY_TOGGLE_OVERLAY_HUB,
+    HOTKEY_OPEN_SWITCHER,
+    HOTKEY_PIN_UNPIN_FOCUSED,
+    HOTKEY_RESET_EVERYTHING,
+)
 DEFAULT_GLOBAL_HOTKEYS = {
-    HOTKEY_QUICK_HIDE: {"enabled": True, "sequence": "Ctrl+Shift+Space"},
-    HOTKEY_RESTORE_LAST: {"enabled": False, "sequence": "Ctrl+Shift+Backspace"},
-    HOTKEY_TOGGLE_VISIBILITY: {"enabled": False, "sequence": "Ctrl+Shift+S"},
+    HOTKEY_HIDE_SELECTED_WINDOW: {"enabled": True, "sequence": "Ctrl+Shift+H"},
+    HOTKEY_RESTORE_LAST: {"enabled": True, "sequence": "Ctrl+Shift+R"},
+    HOTKEY_TOGGLE_OVERLAY_HUB: {"enabled": True, "sequence": "Ctrl+Shift+O"},
+    HOTKEY_OPEN_SWITCHER: {"enabled": True, "sequence": "Ctrl+Shift+J"},
+    HOTKEY_PIN_UNPIN_FOCUSED: {"enabled": False, "sequence": "Ctrl+Shift+P"},
+    HOTKEY_RESET_EVERYTHING: {"enabled": False, "sequence": "Ctrl+Shift+E"},
 }
 
 
@@ -50,6 +70,12 @@ class AppSettings:
     minimize_to_tray_on_close: bool = False
     startup_notification_enabled: bool = True
     silent_startup: bool = False
+    notifications_enabled: bool = True
+    show_tray_notifications: bool = True
+    show_overlay_notifications: bool = True
+    show_restore_notifications: bool = True
+    show_pin_unpin_notifications: bool = True
+    silent_mode: bool = False
     open_windows_auto_refresh: bool = False
     focus_restored_windows: bool = True
     confirm_before_hiding: bool = True
@@ -64,6 +90,18 @@ class AppSettings:
     overlay_groups_enabled: bool = False
     selected_overlay_group_id: str = ""
     overlay_groups: list[dict[str, Any]] = field(default_factory=list)
+    overlay_use_unified_hub: bool = True
+    overlay_use_individual_markers: bool = False
+    overlay_replace_individual_markers: bool = True
+    overlay_auto_snap_to_taskbar: bool = True
+    overlay_compact_mode: bool = True
+    overlay_marker_spacing: int = 8
+    overlay_hub_always_visible: bool = True
+    overlay_hub_auto_hide: bool = False
+    overlay_hub_opacity: float = 0.94
+    overlay_hub_position_by_monitor: dict[str, dict[str, Any]] = field(
+        default_factory=lambda: dict(DEFAULT_OVERLAY_HUB_POSITION)
+    )
     managed_windows: list[dict[str, Any]] = field(default_factory=list)
     global_hotkeys: dict[str, dict[str, Any]] = field(
         default_factory=lambda: _copy_hotkey_defaults()
@@ -171,6 +209,8 @@ def _coerce_setting(name: str, value: Any, default: Any) -> Any:
         return value if isinstance(value, bool) else default
     if isinstance(default, int):
         return value if isinstance(value, int) and not isinstance(value, bool) else default
+    if isinstance(default, float):
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else default
     if default is None and name == "window_geometry":
         return value if isinstance(value, str) or value is None else None
     if isinstance(default, str):
@@ -193,6 +233,21 @@ def _normalize_settings(settings: AppSettings) -> AppSettings:
         settings.accent_color = "#2f81f7"
     settings.window_groups = _normalize_groups(settings.window_groups)
     settings.overlay_groups = _normalize_overlay_groups(settings.overlay_groups)
+    settings.overlay_marker_spacing = _clamp_int(
+        settings.overlay_marker_spacing,
+        minimum=2,
+        maximum=48,
+        default=8,
+    )
+    settings.overlay_hub_opacity = _clamp_float(
+        settings.overlay_hub_opacity,
+        minimum=0.25,
+        maximum=1.0,
+        default=0.94,
+    )
+    settings.overlay_hub_position_by_monitor = _normalize_overlay_positions(
+        settings.overlay_hub_position_by_monitor
+    )
     group_ids = {group["id"] for group in settings.window_groups}
     if settings.selected_group_id not in group_ids:
         settings.selected_group_id = DEFAULT_GROUP_ID
@@ -219,6 +274,8 @@ def _normalize_hotkeys(hotkeys: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     for action_id in HOTKEY_ACTIONS:
         raw_hotkey = hotkeys.get(action_id)
+        if not isinstance(raw_hotkey, dict):
+            raw_hotkey = _legacy_hotkey_config(hotkeys, action_id)
         if not isinstance(raw_hotkey, dict):
             continue
         enabled = raw_hotkey.get("enabled", normalized[action_id]["enabled"])
@@ -372,6 +429,19 @@ def _normalize_overlay_positions(value: Any) -> dict[str, dict[str, Any]]:
             edge = "bottom"
         normalized[monitor_id.strip()] = {"x": x, "y": y, "edge": edge}
     return normalized
+
+
+def _legacy_hotkey_config(
+    hotkeys: dict[str, Any],
+    action_id: str,
+) -> dict[str, Any] | None:
+    for legacy_action, current_action in LEGACY_HOTKEY_ACTION_ALIASES.items():
+        if current_action != action_id:
+            continue
+        raw_hotkey = hotkeys.get(legacy_action)
+        if isinstance(raw_hotkey, dict):
+            return raw_hotkey
+    return None
 
 
 def _normalize_overlay_window_ids(value: Any) -> list[int]:

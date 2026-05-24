@@ -59,10 +59,10 @@ class OverlayGroup:
     id: str
     name: str
     color: str = "#2f81f7"
-    marker_width: int = 10
-    marker_height: int = 88
-    opacity: float = 0.95
-    corner_radius: int = 6
+    marker_width: int = 8
+    marker_height: int = 64
+    opacity: float = 0.9
+    corner_radius: int = 8
     hover_delay_ms: int = 1200
     locked_position: bool = False
     hide_during_fullscreen: bool = True

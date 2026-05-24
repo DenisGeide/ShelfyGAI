@@ -3,23 +3,42 @@
 Overlay markers are ShelfyGAI-owned frameless PySide6 windows. They must not modify
 Windows Explorer, restart Explorer, install shell extensions, or inject into the shell.
 
-## Basic Marker Flow
+For detailed unified hub checks around taskbar edges, autohide, DPI scaling, and
+multi-monitor behavior, also use `docs/OVERLAY_HUB_QA_CHECKLIST.md`.
+
+## Basic Hub Flow
 
 1. Open ShelfyGAI.
 2. Go to **Overlay groups**.
 3. Enable overlay groups.
 4. Create two overlay groups, for example `Work` and `Chat`.
-5. Confirm that two small vertical colored markers appear near the taskbar.
-6. Change marker color, width, height, opacity, and corner radius.
-7. Confirm the marker updates without restarting ShelfyGAI.
+5. Keep **Use unified overlay hub** enabled.
+6. Keep **Replace individual markers with hub** enabled for the default
+   one-button workflow.
+7. Confirm that one small rounded hub button appears near the taskbar tray or
+   overflow area.
+8. Click the hub and confirm it opens a compact flyout with all overlay groups.
+9. Expand a group inside the flyout and confirm hidden windows appear under it.
+10. Use **Open**, **Restore**, and **Bring to front** from the expanded group.
+
+## Individual Marker Flow
+
+1. Enable **Use individual group markers**.
+2. Confirm that per-group markers can appear alongside or instead of the hub.
+3. Confirm markers are compact, calm, and snapped near the taskbar edge by
+   default.
+4. Change marker color, width, height, opacity, and corner radius.
+5. Confirm the marker updates without restarting ShelfyGAI.
 
 ## Drag And Persistence
 
-1. Drag a marker to a different position near the taskbar.
-2. Confirm the marker moves only when position is not locked.
+1. Drag the hub or an individual marker near the taskbar edge.
+2. Confirm it snaps to the edge when **Auto-snap to taskbar edge** is enabled.
+3. Drag it away from the taskbar edge.
+4. Confirm it stays in a free position.
 3. Restart ShelfyGAI.
-4. Confirm the marker returns to its saved position on the same monitor.
-5. Lock marker position and confirm dragging no longer moves it.
+4. Confirm the hub or marker returns to its saved position on the same monitor.
+5. Lock marker position and confirm individual markers no longer move.
 
 ## Taskbar Position
 
@@ -30,8 +49,25 @@ Repeat the basic marker flow with the Windows taskbar positioned at:
 - left
 - right
 
-Expected result: markers default near the available desktop edge next to the taskbar.
+Expected result: the hub and markers default near the available desktop edge next
+to the taskbar tray or overflow area.
 If taskbar edge detection fails, markers should fall back to the bottom screen edge.
+
+## Display Modes
+
+Verify these settings:
+
+- **Use unified overlay hub** shows one compact launcher for all overlay groups.
+- **Replace individual markers with hub** keeps the workflow to a single hub
+  button even when individual markers are configured.
+- **Always show hub** keeps the button clearly visible.
+- **Auto-hide hub when idle** dims the button while keeping it clickable.
+- **Use individual group markers** shows one marker per group.
+- **Compact mode** makes hub and markers smaller and calmer.
+- **Hub opacity** changes the unified hub button opacity.
+- **Marker spacing** changes the default spacing between per-group markers.
+- **Auto-snap to taskbar edge** snaps dragged hub/markers when they are close to
+  the taskbar edge.
 
 ## Marker Menu
 

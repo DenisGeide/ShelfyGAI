@@ -47,6 +47,46 @@ class FakeRuntimeStateShelfService:
         ]
 
 
+class FakeResetShelfService:
+    def __init__(self) -> None:
+        self.unpin_all_calls = 0
+        self.restore_all_focus_values: list[bool] = []
+
+    def unpin_all(self) -> tuple[int, int]:
+        self.unpin_all_calls += 1
+        return 2, 1
+
+    def restore_all(self, *, focus: bool = True) -> tuple[int, int]:
+        self.restore_all_focus_values.append(focus)
+        return 3, 0
+
+
+class FakeOverlayGroupService:
+    def __init__(self) -> None:
+        self.clear_calls = 0
+
+    def clear_assigned_windows(self) -> int:
+        self.clear_calls += 1
+        return 4
+
+
+class FakeOverlayMarkerManager:
+    def __init__(self) -> None:
+        self.reset_calls = 0
+
+    def reset_runtime(self) -> int:
+        self.reset_calls += 1
+        return 5
+
+
+class FakeTimer:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
 def test_cleanup_before_exit_always_unpins_runtime_pinned_windows() -> None:
     window = MainWindow.__new__(MainWindow)
     shelf_service = FakeLifecycleShelfService()
@@ -73,3 +113,53 @@ def test_runtime_settings_do_not_persist_pinned_windows_for_startup() -> None:
 
     assert window._settings.managed_windows == []
     assert not hasattr(window._settings, "pinned_windows")
+
+
+def test_global_reset_restores_unpins_and_clears_runtime_state() -> None:
+    window = MainWindow.__new__(MainWindow)
+    shelf_service = FakeResetShelfService()
+    overlay_service = FakeOverlayGroupService()
+    marker_manager = FakeOverlayMarkerManager()
+    recovery_store = FakeRecoveryStore()
+    persist_reasons: list[str] = []
+    timers = [FakeTimer() for _ in range(6)]
+
+    window._shelf_service = shelf_service
+    window._overlay_group_service = overlay_service
+    window._overlay_marker_manager = marker_manager
+    window._recovery_store = recovery_store
+    window._pinned_order = [100, 200]
+    window._last_shelf_items = ("hidden",)
+    window._last_pinned_items = ("pinned",)
+    window._pending_refresh_reason = "manual"
+    (
+        window._open_windows_refresh_timer,
+        window._pinned_watcher_timer,
+        window._window_state_refresh_timer,
+        window._refresh_debounce_timer,
+        window._open_windows_filter_timer,
+        window._icon_refresh_timer,
+    ) = timers
+    window._persist_managed_state = persist_reasons.append
+
+    result = MainWindow._perform_global_reset(window)
+
+    assert result == {
+        "restored": 3,
+        "restore_skipped": 0,
+        "unpinned": 2,
+        "unpin_skipped": 1,
+        "overlay_markers_removed": 5,
+        "overlay_assignments_removed": 4,
+    }
+    assert shelf_service.unpin_all_calls == 1
+    assert shelf_service.restore_all_focus_values == [False]
+    assert overlay_service.clear_calls == 1
+    assert marker_manager.reset_calls == 1
+    assert all(timer.stopped for timer in timers)
+    assert window._pinned_order == []
+    assert window._last_shelf_items == ()
+    assert window._last_pinned_items == ()
+    assert window._pending_refresh_reason is None
+    assert persist_reasons == ["global emergency reset"]
+    assert recovery_store.clear_reasons == ["global emergency reset"]

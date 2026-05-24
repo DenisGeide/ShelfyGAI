@@ -80,10 +80,19 @@ class GlobalHotkeyManager(QObject, QAbstractNativeEventFilter):
 
     def register_hotkeys(self, hotkeys: dict[str, dict[str, Any]]) -> None:
         self.unregister_all()
-        seen_specs: set[tuple[int, int]] = set()
+        validation_errors = validate_hotkey_configs(hotkeys)
 
         for index, (action_id, config) in enumerate(hotkeys.items(), start=1):
             if not config.get("enabled", False):
+                continue
+            validation_error = validation_errors.get(action_id)
+            if validation_error is not None:
+                self.registrationFailed.emit(action_id, validation_error)
+                LOGGER.warning(
+                    "Invalid global hotkey configuration skipped: action=%s error=%s",
+                    action_id,
+                    validation_error,
+                )
                 continue
             sequence = str(config.get("sequence", "")).strip()
             if not sequence:
@@ -95,14 +104,6 @@ class GlobalHotkeyManager(QObject, QAbstractNativeEventFilter):
                 self.registrationFailed.emit(action_id, str(exc))
                 LOGGER.warning("Invalid global hotkey for %s: %s", action_id, exc)
                 continue
-
-            spec_key = (spec.modifiers, spec.virtual_key)
-            if spec_key in seen_specs:
-                message = tr("hotkey.error.duplicate")
-                self.registrationFailed.emit(action_id, message)
-                LOGGER.warning("Duplicate global hotkey skipped: action=%s", action_id)
-                continue
-            seen_specs.add(spec_key)
 
             # RegisterHotKey ids are process-local and must stay below 0xC000.
             # The 0x4700 range keeps ShelfyGAI ids grouped and out of common samples.
@@ -200,6 +201,31 @@ def parse_hotkey_sequence(sequence: str) -> HotkeySpec:
         raise HotkeyParseError(tr("hotkey.error.unsupported_key", token=key_token))
 
     return HotkeySpec(sequence=sequence, modifiers=modifiers, virtual_key=virtual_key)
+
+
+def validate_hotkey_configs(hotkeys: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Validate enabled hotkeys before asking Windows to register them."""
+
+    errors: dict[str, str] = {}
+    seen_specs: dict[tuple[int, int], str] = {}
+    for action_id, config in hotkeys.items():
+        if not isinstance(config, dict) or not config.get("enabled", False):
+            continue
+        sequence = str(config.get("sequence", "")).strip()
+        try:
+            spec = parse_hotkey_sequence(sequence)
+        except HotkeyParseError as exc:
+            errors[action_id] = str(exc)
+            continue
+        spec_key = (spec.modifiers, spec.virtual_key)
+        previous_action = seen_specs.get(spec_key)
+        if previous_action is not None:
+            message = tr("hotkey.error.duplicate_with", action=previous_action)
+            errors[action_id] = message
+            errors.setdefault(previous_action, message)
+            continue
+        seen_specs[spec_key] = action_id
+    return errors
 
 
 def _virtual_key_from_token(token: str) -> int | None:

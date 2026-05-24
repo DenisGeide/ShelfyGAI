@@ -255,6 +255,24 @@ def test_set_topmost_calls_setwindowpos_and_records_diagnostics(
     assert gateway._last_pin_diagnostics[100]["current_foreground_window"] == 321
 
 
+def test_set_topmost_false_uses_hwnd_notopmost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = _make_minimal_gateway(monkeypatch, extended_style=win32con.WS_EX_TOPMOST)
+    set_window_pos_calls = []
+
+    def set_window_pos(*args):
+        set_window_pos_calls.append(args)
+        return 1
+
+    monkeypatch.setattr(gateway_module.win32gui, "SetWindowPos", set_window_pos)
+
+    gateway._set_topmost(100, enabled=False)
+
+    assert set_window_pos_calls[0][1] == win32con.HWND_NOTOPMOST
+    assert gateway._last_pin_diagnostics[100]["set_window_pos_result"] == 1
+
+
 def test_set_topmost_reports_setwindowpos_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

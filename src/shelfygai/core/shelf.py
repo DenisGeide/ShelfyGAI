@@ -104,6 +104,23 @@ class ShelfService:
         self._pinned_items[handle] = item
         return item
 
+    def is_pinned(self, handle: int) -> bool:
+        return handle in self._pinned_items
+
+    def toggle_pin_foreground(
+        self,
+        *,
+        allow_own_window: bool = False,
+    ) -> tuple[str, PinnedItem | None]:
+        handle = self._window_gateway.foreground_window_handle()
+        if handle is None:
+            raise WindowNotFoundError(tr("error.foreground_not_manageable"))
+        if self.is_pinned(handle):
+            unpinned = self.unpin(handle)
+            return ("unpinned" if unpinned else "skipped", None)
+        item = self.pin(handle, allow_own_window=allow_own_window)
+        return "pinned", item
+
     def unpin(self, handle: int) -> bool:
         if handle not in self._pinned_items:
             LOGGER.info("Ignoring unpin request for unpinned window: handle=%s", handle)
@@ -124,17 +141,31 @@ class ShelfService:
         return True
 
     def unpin_all(self) -> tuple[int, int]:
+        pinned_handles = list(self._pinned_items)
+        LOGGER.info(
+            "Unpin-all requested: pinned_count=%s hwnds=%s",
+            len(pinned_handles),
+            pinned_handles,
+        )
         unpinned = 0
         skipped = 0
-        for handle in list(self._pinned_items):
+        unpinned_handles: list[int] = []
+        for handle in pinned_handles:
             try:
                 if self.unpin(handle):
                     unpinned += 1
+                    unpinned_handles.append(handle)
                 else:
                     skipped += 1
             except Exception:
                 LOGGER.exception("Could not unpin window: handle=%s", handle)
                 skipped += 1
+        LOGGER.info(
+            "Unpin-all completed: unpinned=%s skipped=%s unpinned_hwnds=%s",
+            unpinned,
+            skipped,
+            unpinned_handles,
+        )
         return unpinned, skipped
 
     def pin_diagnostics(self, handle: int) -> str:
@@ -235,6 +266,9 @@ class ShelfService:
     def bring_to_front(self, handle: int) -> None:
         LOGGER.info("Requesting foreground activation: handle=%s", handle)
         self._window_gateway.bring_to_front(handle)
+
+    def window_is_minimized(self, handle: int) -> bool:
+        return self._window_gateway.is_window_minimized(handle)
 
     def prune_missing(self) -> int:
         missing_count = 0

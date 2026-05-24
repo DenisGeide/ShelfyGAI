@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/DenisGeide/ShelfyGAI/releases/download/v0.1.0-alpha/ShelfyGAI-Setup-v0.1.0.exe">
+  <a href="https://github.com/DenisGeide/ShelfyGAI/raw/main/dist/installer/ShelfyGAI-Setup-v0.1.0.exe">
     <img alt="Download ShelfyGAI for Windows" src="https://img.shields.io/badge/Download%20for%20Windows-ShelfyGAI--Setup--v0.1.0.exe-2f81f7?style=for-the-badge&logo=windows">
   </a>
 </p>
@@ -50,7 +50,7 @@ ShelfyGAI is local-first:
 
 For normal users, use the offline Windows installer:
 
-[Download ShelfyGAI-Setup-v0.1.0.exe](https://github.com/DenisGeide/ShelfyGAI/releases/download/v0.1.0-alpha/ShelfyGAI-Setup-v0.1.0.exe)
+[Download ShelfyGAI-Setup-v0.1.0.exe](https://github.com/DenisGeide/ShelfyGAI/raw/main/dist/installer/ShelfyGAI-Setup-v0.1.0.exe)
 
 After installation, ShelfyGAI appears in the Start Menu and creates a desktop
 shortcut by default.
@@ -63,7 +63,10 @@ shortcut by default.
 - Restore one window, the latest hidden window, or everything safely.
 - Pin windows above other windows.
 - Create groups for organized window workflows.
-- Optionally show a ShelfyGAI-owned group window as one taskbar item.
+- Use one compact overlay hub near the taskbar tray area for hidden-window groups.
+- Expand groups inside the hub and open, restore, or bring hidden windows forward.
+- Optionally replace the hub with smaller per-group overlay markers.
+- Control notification behavior, including a silent mode for non-critical messages.
 - Switch the app interface between English and Russian.
 - Keep settings, logs, and recovery state locally.
 
@@ -175,8 +178,12 @@ Pinning uses `SetWindowPos(hwnd, HWND_TOPMOST, ...)`. Unpinning uses
 `HWND_NOTOPMOST`, and ShelfyGAI unpins currently pinned windows on exit by
 default.
 
-Optional group taskbar windows are normal ShelfyGAI-owned windows. They provide
-a safe group representation without modifying Explorer or the Windows shell.
+Overlay groups use normal ShelfyGAI-owned helper windows. By default ShelfyGAI
+shows one compact hub button near the taskbar tray area. Clicking it opens a
+small flyout where groups can be expanded and hidden windows can be opened,
+restored, or brought forward. Individual per-group markers can be enabled when
+preferred. These helpers provide a safe group representation without modifying
+Explorer or the Windows shell.
 
 ## Safety
 
@@ -191,6 +198,17 @@ ShelfyGAI is designed to keep windows recoverable:
 
 If something looks wrong, open ShelfyGAI and use **Restore all**.
 
+## Notification Settings
+
+ShelfyGAI notifications are configurable from **Settings > Notifications**.
+Users can disable all non-critical notifications, tray balloons, overlay
+messages, restore messages, and pin/unpin messages. **Silent mode** suppresses
+non-critical tray balloons, popup toasts, overlay status messages, and temporary
+status banners.
+
+Critical safety messages can still appear, including crash recovery, failed
+restore, and fatal Windows API errors.
+
 ## Limitations
 
 - Tray icon hiding is limited and may not work for third-party apps. In the alpha,
@@ -201,8 +219,8 @@ If something looks wrong, open ShelfyGAI and use **Restore all**.
 - Admin or elevated windows may require running ShelfyGAI as administrator.
 - Native Windows taskbar folders are not implemented because they require unsafe
   shell-level modifications.
-- ShelfyGAI group taskbar windows are safe app-owned windows, not native Windows
-  taskbar folders.
+- ShelfyGAI overlay hub and markers are safe app-owned helper windows, not native
+  Windows taskbar folders.
 - Some custom window frameworks may not respond to standard Windows style
   changes.
 - Window handles are valid only for the current Windows session.

@@ -114,6 +114,17 @@ class OverlayGroupService:
             removed += 1
         return removed
 
+    def clear_assigned_windows(self) -> int:
+        removed = 0
+        for group in list(self._groups.values()):
+            if not group.assigned_window_ids:
+                continue
+            removed += len(group.assigned_window_ids)
+            self._groups[group.id] = replace(group, assigned_window_ids=[])
+        if removed:
+            LOGGER.info("Cleared overlay group runtime window assignments: count=%s", removed)
+        return removed
+
     def prune_stale_window_ids(self, valid_handles: set[int]) -> int:
         removed = 0
         for group in list(self._groups.values()):

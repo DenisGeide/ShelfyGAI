@@ -478,7 +478,15 @@ class WindowsWindowGateway:
 
     def is_window_minimized(self, handle: int) -> bool:
         self._ensure_window(handle)
-        return bool(win32gui.IsIconic(handle))
+        try:
+            minimized = bool(win32gui.IsIconic(handle))
+        except win32gui.error as exc:
+            LOGGER.exception("IsIconic failed: handle=%s", handle)
+            raise WindowOperationError(
+                tr("error.window_state_read", handle=handle)
+            ) from exc
+        LOGGER.debug("Window minimized state read: hwnd=%s minimized=%s", handle, minimized)
+        return minimized
 
     def restore_minimized_window(self, handle: int) -> None:
         self._ensure_window(handle)

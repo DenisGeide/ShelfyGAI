@@ -5,7 +5,9 @@ from enum import StrEnum
 
 
 class UpdateCheckStatus(StrEnum):
-    NOT_IMPLEMENTED = "not_implemented"
+    UPDATE_AVAILABLE = "update_available"
+    UP_TO_DATE = "up_to_date"
+    NO_RELEASES = "no_releases"
     OFFLINE = "offline"
     ERROR = "error"
 

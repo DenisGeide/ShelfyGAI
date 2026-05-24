@@ -5,6 +5,10 @@ release notes, the GitHub release page, and issue discussions.
 
 Screenshots should be updated before every public release.
 
+Current UX direction: keep captures compact and calm. Prefer screens that show
+the cleaner table-first workflow, smaller action bars, tighter empty states,
+compact overlay flyouts, and native-looking confirmation dialogs.
+
 ## Screenshot Slots
 
 | # | Screenshot | Path | What To Show |
@@ -13,7 +17,7 @@ Screenshots should be updated before every public release.
 | 2 | Hidden windows page | `docs/assets/screenshots/02-hidden-windows.png` | Hidden windows page with one or more hidden windows and restore actions. |
 | 3 | Pinned windows page | `docs/assets/screenshots/03-pinned.png` | Pinned page with pinned windows, order controls, and unpin actions. |
 | 4 | Groups page | `docs/assets/screenshots/04-groups.png` | Groups page with clear group names, counts, and group actions. |
-| 5 | Group taskbar window | `docs/assets/screenshots/05-taskbar-group-window.png` | Reserved for the safe app-owned group taskbar window when enabled. |
+| 5 | Overlay hub flyout | `docs/assets/screenshots/05-taskbar-group-window.png` | Unified overlay hub near the tray with an expanded group flyout and optional compact group marker. |
 | 6 | Settings page | `docs/assets/screenshots/06-settings.png` | Settings page showing General, Appearance, Language, Startup, Tray, Hotkeys, Safety, and About. |
 | 7 | Tray menu | `docs/assets/screenshots/07-tray-menu.png` | Windows tray menu with Open ShelfyGAI, Restore all windows, Settings, and Quit. |
 | 8 | EN/RU language switch | `docs/assets/screenshots/08-language-switch.png` | Language selector showing English and Russian options. |
@@ -51,8 +55,9 @@ Screenshots should be updated before every public release.
 4. Hide two or three windows and capture `02-hidden-windows.png`.
 5. Pin one or two windows and capture `03-pinned.png`.
 6. Create a group, add windows, and capture `04-groups.png`.
-7. Capture `05-taskbar-group-window.png` only when the safe group taskbar
-   representation is enabled for that build.
+7. Capture `05-taskbar-group-window.png` with the unified overlay hub near the
+   tray area, one expanded group in the flyout, and, if enabled, one compact
+   individual group marker.
 8. Open Settings and capture `06-settings.png`.
 9. Open the tray menu and capture `07-tray-menu.png`.
 10. Switch between English and Russian and capture `08-language-switch.png`.

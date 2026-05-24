@@ -13,10 +13,10 @@ def test_create_overlay_group_uses_marker_defaults() -> None:
 
     assert group.name == "Work"
     assert group.color == "#55c2a2"
-    assert group.marker_width == 10
-    assert group.marker_height == 88
-    assert group.opacity == 0.95
-    assert group.corner_radius == 6
+    assert group.marker_width == 8
+    assert group.marker_height == 64
+    assert group.opacity == 0.9
+    assert group.corner_radius == 8
     assert group.hover_delay_ms == 1200
     assert group.locked_position is False
     assert group.hide_during_fullscreen is True
@@ -107,3 +107,18 @@ def test_remove_window_from_overlay_group() -> None:
     updated = service.remove_window(group.id, 100)
 
     assert updated.assigned_window_ids == [200]
+
+
+def test_clear_assigned_windows_preserves_overlay_groups() -> None:
+    service = OverlayGroupService()
+    work = service.create_group("Work")
+    chat = service.create_group("Chat")
+    service.assign_window(work.id, 100)
+    service.assign_window(work.id, 200)
+    service.assign_window(chat.id, 300)
+
+    removed = service.clear_assigned_windows()
+
+    assert removed == 3
+    assert [group.name for group in service.groups()] == ["Chat", "Work"]
+    assert all(group.assigned_window_ids == [] for group in service.groups())

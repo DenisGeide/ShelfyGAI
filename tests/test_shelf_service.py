@@ -188,6 +188,45 @@ def test_unpin_restores_original_pin_state() -> None:
     assert service.pinned_items() == []
 
 
+def test_toggle_pin_foreground_pins_and_unpins_active_window() -> None:
+    gateway = FakeWindowGateway()
+    service = ShelfService(gateway)
+
+    result, item = service.toggle_pin_foreground(allow_own_window=True)
+    second_result, second_item = service.toggle_pin_foreground()
+
+    assert result == "pinned"
+    assert item is not None
+    assert item.window.handle == 100
+    assert second_result == "unpinned"
+    assert second_item is None
+    assert gateway.pin_calls == [(100, False, True)]
+    assert gateway.unpin_calls == [100]
+
+
+def test_toggle_pin_foreground_requires_manageable_active_window() -> None:
+    gateway = FakeWindowGateway()
+    gateway.active_handle = None
+    service = ShelfService(gateway)
+
+    with pytest.raises(WindowNotFoundError):
+        service.toggle_pin_foreground()
+
+
+def test_unpin_all_removes_topmost_from_every_pinned_window() -> None:
+    gateway = FakeWindowGateway()
+    service = ShelfService(gateway)
+
+    service.pin(100)
+    service.pin(200)
+
+    unpinned, skipped = service.unpin_all()
+
+    assert (unpinned, skipped) == (2, 0)
+    assert gateway.unpin_calls == [100, 200]
+    assert service.pinned_items() == []
+
+
 def test_pin_diagnostics_delegates_to_gateway() -> None:
     service = ShelfService(FakeWindowGateway())
 
@@ -243,6 +282,15 @@ def test_pinned_watcher_restores_minimized_windows_and_prunes_closed() -> None:
     assert (restored, removed) == (1, 1)
     assert gateway.restored_minimized == [100]
     assert [item.window.handle for item in service.pinned_items()] == [100]
+
+
+def test_window_is_minimized_delegates_to_lightweight_gateway_check() -> None:
+    gateway = FakeWindowGateway()
+    service = ShelfService(gateway)
+    gateway.minimized.add(100)
+
+    assert service.window_is_minimized(100) is True
+    assert service.window_is_minimized(200) is False
 
 
 def test_shelve_foreground_hides_active_window() -> None:
